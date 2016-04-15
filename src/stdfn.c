@@ -1,7 +1,7 @@
 /*
  * Rufus: The Reliable USB Formatting Utility
  * Standard Windows function calls
- * Copyright © 2013-2015 Pete Batard <pete@akeo.ie>
+ * Copyright © 2013-2016 Pete Batard <pete@akeo.ie>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,12 +24,15 @@
 #include <windows.h>
 #include <sddl.h>
 
-#include "msapi_utf8.h"
 #include "rufus.h"
+#include "missing.h"
 #include "resource.h"
-#include "settings.h"
+#include "msapi_utf8.h"
 #include "localization.h"
 
+#include "settings.h"
+
+extern BOOL usb_debug;	// For uuprintf
 int  nWindowsVersion = WINDOWS_UNDEFINED;
 char WindowsVersionStr[128] = "Windows ";
 
@@ -39,7 +42,7 @@ char WindowsVersionStr[128] = "Windows ";
  * [Knuth]            The Art of Computer Programming, part 3 (6.4)
  */
 
-/* 
+/*
  * For the used double hash method the table size has to be a prime. To
  * correct the user given table size we need a prime test.  This trivial
  * algorithm is adequate because the code is called only during init and
@@ -563,7 +566,7 @@ DWORD RunCommand(const char* cmd, const char* dir, BOOL log)
 			goto out;
 		}
 		// We need an inheritable pipe endpoint handle
-		DuplicateHandle(GetCurrentProcess(), hOutputWrite, GetCurrentProcess(), &hDupOutputWrite, 
+		DuplicateHandle(GetCurrentProcess(), hOutputWrite, GetCurrentProcess(), &hDupOutputWrite,
 			0L, TRUE, DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS);
 		si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
 		si.wShowWindow = SW_HIDE;
@@ -616,6 +619,25 @@ BOOL CompareGUID(const GUID *guid1, const GUID *guid2) {
 		return (memcmp(guid1, guid2, sizeof(GUID)) == 0);
 	}
 	return FALSE;
+}
+
+static BOOL CALLBACK EnumFontFamExProc(const LOGFONTA *lpelfe,
+	const TEXTMETRICA *lpntme, DWORD FontType, LPARAM lParam)
+{
+	return TRUE;
+}
+
+BOOL IsFontAvailable(const char* font_name) {
+	LOGFONTA lf = { 0 };
+	HDC hDC = GetDC(hMainDialog);
+
+	if (font_name == NULL)
+		return FALSE;
+
+	lf.lfCharSet = DEFAULT_CHARSET;
+	safe_strcpy(lf.lfFaceName, LF_FACESIZE, font_name);
+
+	return EnumFontFamiliesExA(hDC, &lf, EnumFontFamExProc, 0, 0);
 }
 
 /*
@@ -677,9 +699,9 @@ DWORD WINAPI SetLGPThread(LPVOID param)
 	static DWORD original_val;
 	HKEY path_key = NULL, policy_key = NULL;
 	// MSVC is finicky about these ones => redefine them
-	const IID my_IID_IGroupPolicyObject = 
+	const IID my_IID_IGroupPolicyObject =
 		{ 0xea502723L, 0xa23d, 0x11d1, { 0xa7, 0xd3, 0x0, 0x0, 0xf8, 0x75, 0x71, 0xe3 } };
-	const IID my_CLSID_GroupPolicyObject = 
+	const IID my_CLSID_GroupPolicyObject =
 		{ 0xea502722L, 0xa23d, 0x11d1, { 0xa7, 0xd3, 0x0, 0x0, 0xf8, 0x75, 0x71, 0xe3 } };
 	GUID ext_guid = REGISTRY_EXTENSION_GUID;
 	// Can be anything really
@@ -781,7 +803,7 @@ BOOL SetLGP(BOOL bRestore, BOOL* bExistingKey, const char* szPath, const char* s
 		uprintf("SetLGP: Unable to start thread");
 		return FALSE;
 	}
-	if (WaitForSingleObject(thread_id, 2500) != WAIT_OBJECT_0) {
+	if (WaitForSingleObject(thread_id, 5000) != WAIT_OBJECT_0) {
 		uprintf("SetLGP: Killing stuck thread!");
 		TerminateThread(thread_id, 0);
 		CloseHandle(thread_id);
@@ -790,4 +812,38 @@ BOOL SetLGP(BOOL bRestore, BOOL* bExistingKey, const char* szPath, const char* s
 	if (!GetExitCodeThread(thread_id, &r))
 		return FALSE;
 	return (BOOL) r;
+}
+
+/*
+ * This call tries to evenly balance the affinities for an array of
+ * num_threads, according to the number of cores at our disposal...
+ */
+BOOL SetThreadAffinity(DWORD_PTR* thread_affinity, size_t num_threads)
+{
+	size_t i, j, pc;
+	DWORD_PTR affinity, dummy;
+
+	memset(thread_affinity, 0, num_threads * sizeof(DWORD_PTR));
+	if (!GetProcessAffinityMask(GetCurrentProcess(), &affinity, &dummy))
+		return FALSE;
+	uuprintf("\r\nThread affinities:");
+	uuprintf("  avail:\t%s", printbitslz(affinity));
+
+	// If we don't have enough virtual cores to evenly spread our load forget it
+	pc = popcnt64(affinity);
+	if (pc < num_threads)
+		return FALSE;
+
+	// Spread the affinity as evenly as we can
+	thread_affinity[num_threads - 1] = affinity;
+	for (i = 0; i < num_threads - 1; i++) {
+		for (j = 0; j < pc / num_threads; j++) {
+			thread_affinity[i] |= affinity & (-1LL * affinity);
+			affinity ^= affinity & (-1LL * affinity);
+		}
+		uuprintf("  thr_%d:\t%s", i, printbitslz(thread_affinity[i]));
+		thread_affinity[num_threads - 1] ^= thread_affinity[i];
+	}
+	uuprintf("  thr_%d:\t%s", i, printbitslz(thread_affinity[i]));
+	return TRUE;
 }

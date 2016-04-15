@@ -1,3 +1,21 @@
+o Version 2.8 (2016.03.22)
+    Enable listing of non-USB card readers (EXPERIMENTAL)
+    Major speed improvement for checksum computation
+    Fix UI flicker during progress actualization
+    Fix computation of FAT size for Large FAT32 (with thanks to Ady)
+    Syslinux improvements
+    Update GRUB to 2.02~beta3
+
+o Version 2.7 (2016.02.14)
+    Add Thai translation, courtesy of Sippapas Wangsri
+    Add Drag and Drop support, courtesy of SeymourApps
+    Add a retry for most write operations
+    Update UEFI:NTFS, ms-sys and Grub4DOS to latest
+    Dual sign Rufus with both SHA-1 and SHA-256
+    Fix 2nd line of SHA-256 being hidden on some platforms
+    Fix shutdown prevention issues
+    Additional fixes & translation updates
+
 o Version 2.6 (2015.12.22)
     Add Serbian (Latin) translation, courtesy of Ivan Strugar
     Add a cheat mode to zero a device (Alt-Z)

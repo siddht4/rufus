@@ -1,7 +1,7 @@
 /*
  * Rufus: The Reliable USB Formatting Utility
  * Standard Dialog Routines (Browse for folder, About, etc)
- * Copyright © 2011-2015 Pete Batard <pete@akeo.ie>
+ * Copyright © 2011-2016 Pete Batard <pete@akeo.ie>
  *
  * Based on zadig_stdlg.c, part of libwdi: http://libwdi.akeo.ie
  *
@@ -35,16 +35,16 @@
 #include <richedit.h>
 
 #include "rufus.h"
-#include "msapi_utf8.h"
-#include "registry.h"
-#include "settings.h"
+#include "missing.h"
 #include "resource.h"
-#include "license.h"
+#include "msapi_utf8.h"
 #include "localization.h"
 
-#if (_WIN32_WINNT >= _WIN32_WINNT_VISTA)
+#include "registry.h"
+#include "settings.h"
+#include "license.h"
+
 PF_TYPE_DECL(WINAPI, HRESULT, SHCreateItemFromParsingName, (PCWSTR, IBindCtx*, REFIID, void **));
-#endif
 PF_TYPE_DECL(WINAPI, LPITEMIDLIST, SHSimpleIDListFromPath, (PCWSTR pszPath));
 #define INIT_VISTA_SHELL32         PF_INIT(SHCreateItemFromParsingName, Shell32)
 #define INIT_XP_SHELL32            PF_INIT(SHSimpleIDListFromPath, Shell32)
@@ -63,6 +63,8 @@ static BOOL notification_is_question;
 static const notification_info* notification_more_info;
 static BOOL settings_commcheck = FALSE;
 static WNDPROC update_original_proc = NULL;
+
+extern loc_cmd* selected_locale;
 
 /*
  * We need a sub-callback to read the content of the edit box on exit and update
@@ -131,8 +133,6 @@ void BrowseForFolder(void) {
 
 	BROWSEINFOW bi;
 	LPITEMIDLIST pidl;
-
-#if (_WIN32_WINNT >= _WIN32_WINNT_VISTA)
 	WCHAR *wpath;
 	size_t i;
 	HRESULT hr;
@@ -143,79 +143,77 @@ void BrowseForFolder(void) {
 	char* tmp_path = NULL;
 
 	dialog_showing++;
-	// Even if we have Vista support with the compiler,
-	// it does not mean we have the Vista API available
-	INIT_VISTA_SHELL32;
-	if (IS_VISTA_SHELL32_AVAILABLE) {
-		hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC,
-			&IID_IFileOpenDialog, (LPVOID)&pfod);
-		if (FAILED(hr)) {
-			uprintf("CoCreateInstance for FileOpenDialog failed: error %X\n", hr);
-			pfod = NULL;	// Just in case
-			goto fallback;
-		}
-		hr = pfod->lpVtbl->SetOptions(pfod, FOS_PICKFOLDERS);
-		if (FAILED(hr)) {
-			uprintf("Failed to set folder option for FileOpenDialog: error %X\n", hr);
-			goto fallback;
-		}
-		// Set the initial folder (if the path is invalid, will simply use last)
-		wpath = utf8_to_wchar(szFolderPath);
-		// The new IFileOpenDialog makes us split the path
-		fname = NULL;
-		if ((wpath != NULL) && (wcslen(wpath) >= 1)) {
-			for (i=wcslen(wpath)-1; i!=0; i--) {
-				if (wpath[i] == L'\\') {
-					wpath[i] = 0;
-					fname = &wpath[i+1];
-					break;
-				}
+	if (nWindowsVersion >= WINDOWS_VISTA) {
+		INIT_VISTA_SHELL32;
+		if (IS_VISTA_SHELL32_AVAILABLE) {
+			hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC,
+				&IID_IFileOpenDialog, (LPVOID)&pfod);
+			if (FAILED(hr)) {
+				uprintf("CoCreateInstance for FileOpenDialog failed: error %X\n", hr);
+				pfod = NULL;	// Just in case
+				goto fallback;
 			}
-		}
-
-		hr = (*pfSHCreateItemFromParsingName)(wpath, NULL, &IID_IShellItem, (LPVOID)&si_path);
-		if (SUCCEEDED(hr)) {
-			if (wpath != NULL) {
-				hr = pfod->lpVtbl->SetFolder(pfod, si_path);
-			}
-			if (fname != NULL) {
-				hr = pfod->lpVtbl->SetFileName(pfod, fname);
-			}
-		}
-		safe_free(wpath);
-
-		hr = pfod->lpVtbl->Show(pfod, hMainDialog);
-		if (SUCCEEDED(hr)) {
-			hr = pfod->lpVtbl->GetResult(pfod, &psi);
-			if (SUCCEEDED(hr)) {
-				psi->lpVtbl->GetDisplayName(psi, SIGDN_FILESYSPATH, &wpath);
-				tmp_path = wchar_to_utf8(wpath);
-				CoTaskMemFree(wpath);
-				if (tmp_path == NULL) {
-					uprintf("Could not convert path\n");
-				} else {
-					safe_strcpy(szFolderPath, MAX_PATH, tmp_path);
-					safe_free(tmp_path);
-				}
-			} else {
+			hr = pfod->lpVtbl->SetOptions(pfod, FOS_PICKFOLDERS);
+			if (FAILED(hr)) {
 				uprintf("Failed to set folder option for FileOpenDialog: error %X\n", hr);
+				goto fallback;
 			}
-		} else if ((hr & 0xFFFF) != ERROR_CANCELLED) {
-			// If it's not a user cancel, assume the dialog didn't show and fallback
-			uprintf("Could not show FileOpenDialog: error %X\n", hr);
-			goto fallback;
+			// Set the initial folder (if the path is invalid, will simply use last)
+			wpath = utf8_to_wchar(szFolderPath);
+			// The new IFileOpenDialog makes us split the path
+			fname = NULL;
+			if ((wpath != NULL) && (wcslen(wpath) >= 1)) {
+				for (i = wcslen(wpath) - 1; i != 0; i--) {
+					if (wpath[i] == L'\\') {
+						wpath[i] = 0;
+						fname = &wpath[i + 1];
+						break;
+					}
+				}
+			}
+
+			hr = (*pfSHCreateItemFromParsingName)(wpath, NULL, &IID_IShellItem, (LPVOID)&si_path);
+			if (SUCCEEDED(hr)) {
+				if (wpath != NULL) {
+					pfod->lpVtbl->SetFolder(pfod, si_path);
+				}
+				if (fname != NULL) {
+					pfod->lpVtbl->SetFileName(pfod, fname);
+				}
+			}
+			safe_free(wpath);
+
+			hr = pfod->lpVtbl->Show(pfod, hMainDialog);
+			if (SUCCEEDED(hr)) {
+				hr = pfod->lpVtbl->GetResult(pfod, &psi);
+				if (SUCCEEDED(hr)) {
+					psi->lpVtbl->GetDisplayName(psi, SIGDN_FILESYSPATH, &wpath);
+					tmp_path = wchar_to_utf8(wpath);
+					CoTaskMemFree(wpath);
+					if (tmp_path == NULL) {
+						uprintf("Could not convert path\n");
+					} else {
+						safe_strcpy(szFolderPath, MAX_PATH, tmp_path);
+						safe_free(tmp_path);
+					}
+				} else {
+					uprintf("Failed to set folder option for FileOpenDialog: error %X\n", hr);
+				}
+			} else if ((hr & 0xFFFF) != ERROR_CANCELLED) {
+				// If it's not a user cancel, assume the dialog didn't show and fallback
+				uprintf("Could not show FileOpenDialog: error %X\n", hr);
+				goto fallback;
+			}
+			pfod->lpVtbl->Release(pfod);
+			dialog_showing--;
+			return;
 		}
-		pfod->lpVtbl->Release(pfod);
-		dialog_showing--;
-		return;
-	}
 fallback:
-	if (pfod != NULL) {
-		pfod->lpVtbl->Release(pfod);
+		if (pfod != NULL) {
+			pfod->lpVtbl->Release(pfod);
+		}
 	}
-#else
-	dialog_showing++;
-#endif
+
 	INIT_XP_SHELL32;
 	memset(&bi, 0, sizeof(BROWSEINFOW));
 	bi.hwndOwner = hMainDialog;
@@ -249,101 +247,98 @@ char* FileDialog(BOOL save, char* path, const ext_t* ext, DWORD options)
 	size_t i, j, ext_strlen;
 	BOOL r;
 	char* filepath = NULL;
-
-#if (_WIN32_WINNT >= _WIN32_WINNT_VISTA)
 	HRESULT hr = FALSE;
 	IFileDialog *pfd = NULL;
 	IShellItem *psiResult;
-	COMDLG_FILTERSPEC* filter_spec;
+	COMDLG_FILTERSPEC* filter_spec = NULL;
 	wchar_t *wpath = NULL, *wfilename = NULL;
 	IShellItem *si_path = NULL;	// Automatically freed
-#endif
 
 	if ((ext == NULL) || (ext->count == 0) || (ext->extension == NULL) || (ext->description == NULL))
 		return NULL;
 	dialog_showing++;
 
-#if (_WIN32_WINNT >= _WIN32_WINNT_VISTA)
-	INIT_VISTA_SHELL32;
-	filter_spec = (COMDLG_FILTERSPEC*)calloc(ext->count + 1, sizeof(COMDLG_FILTERSPEC));
-	if ((IS_VISTA_SHELL32_AVAILABLE) && (filter_spec != NULL)) {
-		// Setup the file extension filter table
-		for (i=0; i<ext->count; i++) {
-			filter_spec[i].pszSpec = utf8_to_wchar(ext->extension[i]);
-			filter_spec[i].pszName = utf8_to_wchar(ext->description[i]);
-		}
-		filter_spec[i].pszSpec = L"*.*";
-		filter_spec[i].pszName = utf8_to_wchar(lmprintf(MSG_107));
-
-		hr = CoCreateInstance(save?&CLSID_FileSaveDialog:&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC,
-			&IID_IFileDialog, (LPVOID)&pfd);
-
-		if (FAILED(hr)) {
-			SetLastError(hr);
-			uprintf("CoCreateInstance for FileOpenDialog failed: %s\n", WindowsErrorString());
-			pfd = NULL;	// Just in case
-			goto fallback;
-		}
-
-		// Set the file extension filters
-		pfd->lpVtbl->SetFileTypes(pfd, (UINT)ext->count+1, filter_spec);
-
-		// Set the default directory
-		wpath = utf8_to_wchar(path);
-		hr = (*pfSHCreateItemFromParsingName)(wpath, NULL, &IID_IShellItem, (LPVOID) &si_path);
-		if (SUCCEEDED(hr)) {
-			pfd->lpVtbl->SetFolder(pfd, si_path);
-		}
-		safe_free(wpath);
-
-		// Set the default filename
-		wfilename = utf8_to_wchar((ext->filename == NULL)?"":ext->filename);
-		if (wfilename != NULL) {
-			pfd->lpVtbl->SetFileName(pfd, wfilename);
-		}
-
-		// Display the dialog
-		hr = pfd->lpVtbl->Show(pfd, hMainDialog);
-
-		// Cleanup
-		safe_free(wfilename);
-		for (i=0; i<ext->count; i++) {
-			safe_free(filter_spec[i].pszSpec);
-			safe_free(filter_spec[i].pszName);
-		}
-		safe_free(filter_spec[i].pszName);
-		safe_free(filter_spec);
-
-		if (SUCCEEDED(hr)) {
-			// Obtain the result of the user's interaction with the dialog.
-			hr = pfd->lpVtbl->GetResult(pfd, &psiResult);
-			if (SUCCEEDED(hr)) {
-				hr = psiResult->lpVtbl->GetDisplayName(psiResult, SIGDN_FILESYSPATH, &wpath);
-				if (SUCCEEDED(hr)) {
-					filepath = wchar_to_utf8(wpath);
-					CoTaskMemFree(wpath);
-				} else {
-					SetLastError(hr);
-					uprintf("Unable to access file path: %s\n", WindowsErrorString());
-				}
-				psiResult->lpVtbl->Release(psiResult);
+	if (nWindowsVersion >= WINDOWS_VISTA) {
+		INIT_VISTA_SHELL32;
+		filter_spec = (COMDLG_FILTERSPEC*)calloc(ext->count + 1, sizeof(COMDLG_FILTERSPEC));
+		if ((IS_VISTA_SHELL32_AVAILABLE) && (filter_spec != NULL)) {
+			// Setup the file extension filter table
+			for (i = 0; i < ext->count; i++) {
+				filter_spec[i].pszSpec = utf8_to_wchar(ext->extension[i]);
+				filter_spec[i].pszName = utf8_to_wchar(ext->description[i]);
 			}
-		} else if ((hr & 0xFFFF) != ERROR_CANCELLED) {
-			// If it's not a user cancel, assume the dialog didn't show and fallback
-			SetLastError(hr);
-			uprintf("Could not show FileOpenDialog: %s\n", WindowsErrorString());
-			goto fallback;
-		}
-		pfd->lpVtbl->Release(pfd);
-		dialog_showing--;
-		return filepath;
-	}
+			filter_spec[i].pszSpec = L"*.*";
+			filter_spec[i].pszName = utf8_to_wchar(lmprintf(MSG_107));
 
-fallback:
-	if (pfd != NULL) {
-		pfd->lpVtbl->Release(pfd);
+			hr = CoCreateInstance(save ? &CLSID_FileSaveDialog : &CLSID_FileOpenDialog, NULL, CLSCTX_INPROC,
+				&IID_IFileDialog, (LPVOID)&pfd);
+
+			if (FAILED(hr)) {
+				SetLastError(hr);
+				uprintf("CoCreateInstance for FileOpenDialog failed: %s\n", WindowsErrorString());
+				pfd = NULL;	// Just in case
+				goto fallback;
+			}
+
+			// Set the file extension filters
+			pfd->lpVtbl->SetFileTypes(pfd, (UINT)ext->count + 1, filter_spec);
+
+			// Set the default directory
+			wpath = utf8_to_wchar(path);
+			hr = (*pfSHCreateItemFromParsingName)(wpath, NULL, &IID_IShellItem, (LPVOID)&si_path);
+			if (SUCCEEDED(hr)) {
+				pfd->lpVtbl->SetFolder(pfd, si_path);
+			}
+			safe_free(wpath);
+
+			// Set the default filename
+			wfilename = utf8_to_wchar((ext->filename == NULL) ? "" : ext->filename);
+			if (wfilename != NULL) {
+				pfd->lpVtbl->SetFileName(pfd, wfilename);
+			}
+
+			// Display the dialog
+			hr = pfd->lpVtbl->Show(pfd, hMainDialog);
+
+			// Cleanup
+			safe_free(wfilename);
+			for (i = 0; i < ext->count; i++) {
+				safe_free(filter_spec[i].pszSpec);
+				safe_free(filter_spec[i].pszName);
+			}
+			safe_free(filter_spec[i].pszName);
+			safe_free(filter_spec);
+
+			if (SUCCEEDED(hr)) {
+				// Obtain the result of the user's interaction with the dialog.
+				hr = pfd->lpVtbl->GetResult(pfd, &psiResult);
+				if (SUCCEEDED(hr)) {
+					hr = psiResult->lpVtbl->GetDisplayName(psiResult, SIGDN_FILESYSPATH, &wpath);
+					if (SUCCEEDED(hr)) {
+						filepath = wchar_to_utf8(wpath);
+						CoTaskMemFree(wpath);
+					} else {
+						SetLastError(hr);
+						uprintf("Unable to access file path: %s\n", WindowsErrorString());
+					}
+					psiResult->lpVtbl->Release(psiResult);
+				}
+			} else if ((hr & 0xFFFF) != ERROR_CANCELLED) {
+				// If it's not a user cancel, assume the dialog didn't show and fallback
+				SetLastError(hr);
+				uprintf("Could not show FileOpenDialog: %s\n", WindowsErrorString());
+				goto fallback;
+			}
+			pfd->lpVtbl->Release(pfd);
+			dialog_showing--;
+			return filepath;
+		}
+	fallback:
+		safe_free(filter_spec);
+		if (pfd != NULL) {
+			pfd->lpVtbl->Release(pfd);
+		}
 	}
-#endif
 
 	memset(&ofn, 0, sizeof(ofn));
 	ofn.lStructSize = sizeof(ofn);
@@ -611,7 +606,7 @@ INT_PTR CALLBACK AboutCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM lP
 			ShowWindow(GetDlgItem(hDlg, IDC_ABOUT_UPDATES), SW_SHOW);
 		safe_sprintf(about_blurb, sizeof(about_blurb), about_blurb_format, lmprintf(MSG_174|MSG_RTF),
 			lmprintf(MSG_175|MSG_RTF, rufus_version[0], rufus_version[1], rufus_version[2]),
-			right_to_left_mode?"Akeo \\\\ Pete Batard 2011-2015 © Copyright":"Copyright © 2011-2015 Pete Batard / Akeo",
+			right_to_left_mode?"Akeo \\\\ Pete Batard 2011-2016 © Copyright":"Copyright © 2011-2016 Pete Batard / Akeo",
 			lmprintf(MSG_176|MSG_RTF), lmprintf(MSG_177|MSG_RTF), lmprintf(MSG_178|MSG_RTF));
 		for (i=0; i<ARRAYSIZE(hEdit); i++) {
 			hEdit[i] = GetDlgItem(hDlg, edit_id[i]);
@@ -1355,14 +1350,14 @@ INT_PTR CALLBACK UpdateCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM l
 BOOL SetUpdateCheck(void)
 {
 	BOOL enable_updates;
-	DWORD commcheck = GetTickCount();
+	uint64_t commcheck = _GetTickCount64();
 	notification_info more_info = { IDD_UPDATE_POLICY, UpdateCallback };
 	char filename[MAX_PATH] = "", exename[] = APPLICATION_NAME ".exe";
 	size_t fn_len, exe_len;
 
 	// Test if we can read and write settings. If not, forget it.
-	WriteSetting32(SETTING_COMM_CHECK, commcheck);
-	if (ReadSetting32(SETTING_COMM_CHECK) != commcheck)
+	WriteSetting64(SETTING_COMM_CHECK, commcheck);
+	if (ReadSetting64(SETTING_COMM_CHECK) != commcheck)
 		return FALSE;
 	settings_commcheck = TRUE;
 
@@ -1646,6 +1641,7 @@ out:
 LPCDLGTEMPLATE GetDialogTemplate(int Dialog_ID)
 {
 	int i;
+	const char thai_id[] = "th-TH";
 	size_t len;
 	DWORD size;
 	DWORD* dwBuf;
@@ -1662,6 +1658,18 @@ LPCDLGTEMPLATE GetDialogTemplate(int Dialog_ID)
 		dwBuf = (DWORD*)rcTemplate;
 		dwBuf[2] = WS_EX_RTLREADING | WS_EX_APPWINDOW | WS_EX_LAYOUTRTL;
 	}
+
+	// All our dialogs are set to use 'Segoe UI Symbol' by default:
+	// 1. So that we can replace the font name with 'MS Shell Dlg' (XP) or 'Segoe UI'
+	// 2. So that Thai displays properly on RTF controls as it won't work with regular
+	// 'Segoe UI'... but Cyrillic won't work with 'Segoe UI Symbol'
+
+	// If 'Segoe UI Symbol' is available, and we are using Thai, we're done here
+	if (IsFontAvailable("Segoe UI Symbol") && (selected_locale != NULL)
+		&& (safe_strcmp(selected_locale->txt[0], thai_id) == 0))
+		return rcTemplate;
+
+	// 'Segoe UI Symbol' cannot be used => Fall back to the best we have
 	wBuf = (WCHAR*)rcTemplate;
 	wBuf = &wBuf[14];	// Move to class name
 	// Skip class name and title
@@ -1680,10 +1688,11 @@ LPCDLGTEMPLATE GetDialogTemplate(int Dialog_ID)
 		// We can't simply zero the characters we don't want, as the size of the font
 		// string determines the next item lookup. So we must memmove the remaining of
 		// our buffer. Oh, and those items are DWORD aligned.
-		if (nWindowsVersion <= WINDOWS_XP) {
-			wcscpy(wBuf, L"MS Shell Dlg");
-		} else {
+		if (IsFontAvailable("Segoe UI")) {
+			// 'Segoe UI Symbol' -> 'Segoe UI'
 			wBuf[8] = 0;
+		} else {
+			wcscpy(wBuf, L"MS Shell Dlg");
 		}
 		len = wcslen(wBuf);
 		wBuf[len + 1] = 0;

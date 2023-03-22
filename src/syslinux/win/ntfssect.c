@@ -146,9 +146,14 @@ DWORD M_NTFSSECT_API NtfsSectGetVolumeInfo(
     if (!VolumeName || !VolumeInfo)
       return ERROR_INVALID_PARAMETER;
 
-    rc = NtfsSectGetVolumeHandle(VolumeName, VolumeInfo);
-    if (rc != ERROR_SUCCESS)
-      goto err_handle;
+    /* Only create a handle if it's not already been set */
+    if ((VolumeInfo->Handle == NULL) || (VolumeInfo->Handle == INVALID_HANDLE_VALUE)) {
+      rc = NtfsSectGetVolumeHandle(VolumeName, VolumeInfo);
+      if (rc != ERROR_SUCCESS)
+        goto err_handle;
+      if ((VolumeInfo->Handle == NULL) || (VolumeInfo->Handle == INVALID_HANDLE_VALUE))
+        return ERROR_INVALID_HANDLE;
+    }
 
     rc = NtfsSectLoadXpFuncs(&xp_funcs);
     if (rc != ERROR_SUCCESS)
@@ -302,7 +307,7 @@ DWORD M_NTFSSECT_API NtfsSectLoadXpFuncs(S_NTFSSECT_XPFUNCS * XpFuncs) {
 
     XpFuncs->Size = sizeof *XpFuncs;
 
-    XpFuncs->Kernel32 = LoadLibraryA("kernel32.dll");
+    XpFuncs->Kernel32 = LoadLibraryExA("kernel32.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     rc = GetLastError();
     if (!XpFuncs->Kernel32) {
         M_ERR("KERNEL32.DLL not found!");

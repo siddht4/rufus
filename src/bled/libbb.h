@@ -2,7 +2,7 @@
  * Library header for busybox/Bled
  *
  * Rewritten for Bled (Base Library for Easy Decompression)
- * Copyright © 2014-2015 Pete Batard <pete@akeo.ie>
+ * Copyright © 2014-2022 Pete Batard <pete@akeo.ie>
  *
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
@@ -18,15 +18,6 @@
 
 #ifndef _WIN32
 #error Only Windows platforms are supported
-#endif
-
-#if defined(DDKBUILD)
-#pragma warning(disable: 4242)		// "Conversion from x to y, possible loss of data"
-#pragma warning(disable: 4244)
-struct timeval {
-	long tv_sec;
-	long tv_usec;
-};
 #endif
 
 #include "platform.h"
@@ -48,17 +39,20 @@ struct timeval {
 #include <sys/types.h>
 #include <io.h>
 
-#ifdef BUFSIZ
-#undef BUFSIZ
-#endif
-#define BUFSIZ 65536
+#define BB_BUFSIZE 0x40000
 
+#define ENABLE_DESKTOP 1
+#if ENABLE_DESKTOP
 #define IF_DESKTOP(x) x
 #define IF_NOT_DESKTOP(x)
+#else
+#define IF_DESKTOP(x)
+#define IF_NOT_DESKTOP(x) x
+#endif
 #define IF_NOT_FEATURE_LZMA_FAST(x) x
 
 #define uoff_t unsigned off_t
-#define OFF_FMT "I64"
+#define OFF_FMT PRIi64
 
 #ifndef _MODE_T_
 #define _MODE_T_
@@ -92,6 +86,8 @@ typedef unsigned int uid_t;
 #define PATH_MAX MAX_PATH
 #endif
 
+#define BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
+
 #ifndef get_le64
 #define get_le64(ptr) (*(const uint64_t *)(ptr))
 #endif
@@ -107,6 +103,9 @@ typedef unsigned int uid_t;
 extern smallint bb_got_signal;
 extern uint32_t *global_crc32_table;
 extern jmp_buf bb_error_jmp;
+extern char* bb_virtual_buf;
+extern size_t bb_virtual_len, bb_virtual_pos;
+extern int bb_virtual_fd;
 
 uint32_t* crc32_filltable(uint32_t *crc_table, int endian);
 uint32_t crc32_le(uint32_t crc, unsigned char const *p, size_t len, uint32_t *crc32table_le);
@@ -129,18 +128,29 @@ typedef struct _llist_t {
 	char *data;
 } llist_t;
 
+struct timeval64 {
+	int64_t tv_sec;
+	int32_t tv_usec;
+};
+
 extern void (*bled_printf) (const char* format, ...);
 extern void (*bled_progress) (const uint64_t processed_bytes);
+extern void (*bled_switch) (const char* filename, const uint64_t filesize);
+extern int (*bled_read)(int fd, void* buf, unsigned int count);
+extern int (*bled_write)(int fd, const void* buf, unsigned int count);
 extern unsigned long* bled_cancel_request;
 
 #define xfunc_die() longjmp(bb_error_jmp, 1)
 #define bb_printf(...) do { if (bled_printf != NULL) bled_printf(__VA_ARGS__); \
 	else { printf(__VA_ARGS__); putchar('\n'); } } while(0)
-#define bb_error_msg bb_printf
-#define bb_error_msg_and_die(...) do {bb_printf(__VA_ARGS__); xfunc_die();} while(0)
-#define bb_error_msg_and_err(...) do {bb_printf(__VA_ARGS__); goto err;} while(0)
+#define bb_error_msg(...) bb_printf("\nError: " __VA_ARGS__)
+#define bb_error_msg_and_die(...) do {bb_error_msg(__VA_ARGS__); xfunc_die();} while(0)
+#define bb_error_msg_and_err(...) do {bb_error_msg(__VA_ARGS__); goto err;} while(0)
 #define bb_perror_msg bb_error_msg
 #define bb_perror_msg_and_die bb_error_msg_and_die
+#define bb_simple_error_msg bb_error_msg
+#define bb_simple_perror_msg_and_die bb_error_msg_and_die
+#define bb_simple_error_msg_and_die bb_error_msg_and_die
 #define bb_putchar putchar
 
 static inline void *xrealloc(void *ptr, size_t size) {
@@ -152,22 +162,22 @@ static inline void *xrealloc(void *ptr, size_t size) {
 
 #define bb_msg_read_error "read error"
 #define bb_msg_write_error "write error"
-#define bb_mode_string(mode) "[not implemented]"
-#define bb_copyfd_exact_size(fd1, fd2, size) bb_printf("not implemented")
+#define bb_mode_string(str, mode) "[not implemented]"
+#define bb_copyfd_exact_size(fd1, fd2, size) bb_error_msg("Not implemented")
 #define bb_make_directory(path, mode, flags) SHCreateDirectoryExU(NULL, path, NULL)
 
 static inline int link(const char *oldpath, const char *newpath) {errno = ENOSYS; return -1;}
 static inline int symlink(const char *oldpath, const char *newpath) {errno = ENOSYS; return -1;}
 static inline int chown(const char *path, uid_t owner, gid_t group) {errno = ENOSYS; return -1;}
 static inline int mknod(const char *pathname, mode_t mode, dev_t dev) {errno = ENOSYS; return -1;}
-static inline int utimes(const char *filename, const struct timeval times[2]) {errno = ENOSYS; return -1;}
+static inline int utimes64(const char* filename, const struct timeval64 times64[2]) { errno = ENOSYS; return -1; }
 static inline int fnmatch(const char *pattern, const char *string, int flags) {return PathMatchSpecA(string, pattern)?0:1;}
 static inline pid_t wait(int* status) { *status = 4; return -1; }
 #define wait_any_nohang wait
 
-/* This override enables the display of a progress based on the number of bytes read */
+/* This enables the display of a progress based on the number of bytes read */
 extern uint64_t bb_total_rb;
-static inline int full_read(int fd, void *buf, size_t count) {
+static inline int full_read(int fd, void *buf, unsigned int count) {
 	int rb;
 
 	if (fd < 0) {
@@ -183,7 +193,15 @@ static inline int full_read(int fd, void *buf, size_t count) {
 		return -1;
 	}
 
-	rb = _read(fd, buf, (int)count);
+	if (fd == bb_virtual_fd) {
+		if (bb_virtual_pos + count > bb_virtual_len)
+			count = (unsigned int)(bb_virtual_len - bb_virtual_pos);
+		memcpy(buf, &bb_virtual_buf[bb_virtual_pos], count);
+		bb_virtual_pos += count;
+		rb = (int)count;
+	} else {
+		rb = (bled_read != NULL) ? bled_read(fd, buf, count) : _read(fd, buf, count);
+	}
 	if (rb > 0) {
 		bb_total_rb += rb;
 		if (bled_progress != NULL)
@@ -192,17 +210,17 @@ static inline int full_read(int fd, void *buf, size_t count) {
 	return rb;
 }
 
+static inline int full_write(int fd, const void* buffer, unsigned int count)
+{
+	return (bled_write != NULL) ? bled_write(fd, buffer, count) : _write(fd, buffer, count);
+}
+
 static inline struct tm *localtime_r(const time_t *timep, struct tm *result) {
-#if defined(DDKBUILD)
-	result = localtime(timep);
-#else
 	if (localtime_s(result, timep) != 0)
 		result = NULL;
-#endif
 	return result;
 }
 
-#define full_write _write
 #define safe_read full_read
 #define lstat stat
 #define xmalloc malloc

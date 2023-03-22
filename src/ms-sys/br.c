@@ -117,7 +117,7 @@ int is_2000_mbr(FILE *fp)
    #include "mbr_2000.h"
 
    return
-      contains_data(fp, 0x0, mbr_2000_0x0, sizeof(mbr_2000_0x0)) &&
+      contains_data(fp, 0x0, mbr_2000_0x0, MBR_2000_LANG_INDEP_LEN) &&
       is_br(fp);
 } /* is_2000_mbr */
 
@@ -126,7 +126,7 @@ int is_vista_mbr(FILE *fp)
    #include "mbr_vista.h"
 
    return
-      contains_data(fp, 0x0, mbr_vista_0x0, sizeof(mbr_vista_0x0)) &&
+      contains_data(fp, 0x0, mbr_vista_0x0, MBR_VISTA_LANG_INDEP_LEN) &&
       is_br(fp);
 } /* is_vista_mbr */
 
@@ -135,7 +135,7 @@ int is_win7_mbr(FILE *fp)
    #include "mbr_win7.h"
 
    return
-      contains_data(fp, 0x0, mbr_win7_0x0, sizeof(mbr_win7_0x0)) &&
+      contains_data(fp, 0x0, mbr_win7_0x0, MBR_WIN7_LANG_INDEP_LEN) &&
       is_br(fp);
 } /* is_win7_mbr */
 
@@ -147,6 +147,15 @@ int is_rufus_mbr(FILE *fp)
       contains_data(fp, 0x0, mbr_rufus_0x0, sizeof(mbr_rufus_0x0)) &&
       is_br(fp);
 } /* is_rufus_mbr */
+
+int is_rufus_msg_mbr(FILE *fp)
+{
+#include "mbr_msg_rufus.h"
+
+    return
+       contains_data(fp, 0x0, mbr_msg_rufus_0x0, sizeof(mbr_msg_rufus_0x0)) &&
+       is_br(fp);
+} /* is_rufus_msg_mbr */
 
 int is_reactos_mbr(FILE *fp)
 {
@@ -288,6 +297,15 @@ int write_rufus_mbr(FILE *fp)
       write_data(fp, 0x0, mbr_rufus_0x0, sizeof(mbr_rufus_0x0)) &&
       write_bootmark(fp);
 } /* write_rufus_mbr */
+
+int write_rufus_msg_mbr(FILE *fp)
+{
+#include "mbr_msg_rufus.h"
+
+    return
+       write_data(fp, 0x0, mbr_msg_rufus_0x0, sizeof(mbr_msg_rufus_0x0)) &&
+       write_bootmark(fp);
+} /* write_rufus_msg_mbr */
 
 int write_reactos_mbr(FILE *fp)
 {

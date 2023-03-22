@@ -1,7 +1,7 @@
 /*
  * Rufus: The Reliable USB Formatting Utility
  * Elementary Unicode compliant find/replace parser
- * Copyright © 2012-2016 Pete Batard <pete@akeo.ie>
+ * Copyright © 2012-2022 Pete Batard <pete@akeo.ie>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -136,6 +136,10 @@ static loc_cmd* get_loc_cmd(char c, char* line) {
 					lcmd->unum_size++;
 			}
 			lcmd->unum = (uint32_t*)malloc(lcmd->unum_size * sizeof(uint32_t));
+			if (lcmd->unum == NULL) {
+				luprint("could not allocate memory");
+				goto err;
+			}
 			token = strtok(&line[i], ".,");
 			for (l=0; (l<lcmd->unum_size) && (token != NULL); l++) {
 				lcmd->unum[l] = (int32_t)strtol(token, &endptr, 0);
@@ -232,7 +236,6 @@ out:
  * Parse a localization file, to construct the list of available locales.
  * The locale file must be UTF-8 with NO BOM.
  */
-extern char lost_translators[][6];
 BOOL get_supported_locales(const char* filename)
 {
 	FILE* fd = NULL;
@@ -242,7 +245,7 @@ BOOL get_supported_locales(const char* filename)
 	loc_cmd *lcmd = NULL, *last_lcmd = NULL;
 	long end_of_block;
 	int version_line_nr = 0;
-	uint32_t loc_base_minor = -1, loc_base_micro = -1;
+	uint32_t loc_base_major = -1, loc_base_minor = -1;
 
 	fd = open_loc_file(filename);
 	if (fd == NULL)
@@ -280,6 +283,7 @@ BOOL get_supported_locales(const char* filename)
 		if ((line[i] != 'l') && (line[i] != 'v') && (line[i] != 'a'))
 			continue;
 		// line[i] is not NUL so i+1 is safe to access
+		// coverity[tainted_data]
 		lcmd = get_loc_cmd(line[i], &line[i+1]);
 		if ((lcmd == NULL) || ((lcmd->command != LC_LOCALE) && (lcmd->command != LC_VERSION) && (lcmd->command != LC_ATTRIBUTES))) {
 			free_loc_cmd(lcmd);
@@ -323,30 +327,23 @@ BOOL get_supported_locales(const char* filename)
 		case LC_VERSION:
 			if (version_line_nr != 0) {
 				luprintf("[v]ersion was already provided at line %d", version_line_nr);
-			} else if (lcmd->unum_size != 3) {
+			} else if (lcmd->unum_size != 2) {
 				luprint("[v]ersion format is invalid");
 			} else if (last_lcmd == NULL) {
 				luprint("[v]ersion cannot precede [l]ocale");
-			} else if (lcmd->unum[0] != LOC_FRAMEWORK_VERSION) {
-				// If the localization framework evolved in a manner that makes existing
-				// translations incompatible, we need to discard them.
-				luprint("[v]ersion is not compatible with this framework");
-			} else if (loc_base_minor == -1) {
+			} else if (loc_base_major == -1) {
 				// We use the first version from our loc file (usually en-US) as our base
 				// as it should always be the most up to date.
+				loc_base_major = lcmd->unum[0];
 				loc_base_minor = lcmd->unum[1];
-				loc_base_micro = lcmd->unum[2];
 				version_line_nr = loc_line_nr;
-			} else if (lcmd->unum[1] < loc_base_minor) {
-				luprintf("the version of this locale is incompatible with this version of " APPLICATION_NAME " and MUST be updated to at least v%d.%d.0",
-					LOC_FRAMEWORK_VERSION, loc_base_minor);
 			} else {
-				if (lcmd->unum[2] < loc_base_micro) {
+				if ((lcmd->unum[0] < loc_base_major) || ((lcmd->unum[0] == loc_base_major) && (lcmd->unum[1] < loc_base_minor))) {
 					last_lcmd->ctrl_id |= LOC_NEEDS_UPDATE;
 					luprintf("the version of this translation is older than the base one and may result in some messages not being properly translated.\n"
-						"If you are the translator, please update your translation with the changes that intervened between v%d.%d.%d and v%d.%d.%d.\n"
-						"See https://github.com/pbatard/rufus/blob/master/res/localization/ChangeLog.txt",
-						LOC_FRAMEWORK_VERSION, loc_base_minor, lcmd->unum[2], LOC_FRAMEWORK_VERSION, loc_base_minor, loc_base_micro);
+						"If you are the translator, please update your translation with the changes that intervened between v%d.%d and v%d.%d.\n"
+						"See https://github.com/pbatard/rufus/blob/master/res/loc/ChangeLog.txt",
+						lcmd->unum[0], lcmd->unum[1], loc_base_major, loc_base_minor);
 				}
 				version_line_nr = loc_line_nr;
 			}
@@ -376,7 +373,6 @@ out:
 /*
  * Parse a locale section in a localization file (UTF-8, no BOM)
  * NB: this call is reentrant for the "base" command support
- * TODO: Working on memory rather than on file would improve performance
  */
 BOOL get_loc_data_file(const char* filename, loc_cmd* lcmd)
 {
@@ -451,6 +447,7 @@ BOOL get_loc_data_file(const char* filename, loc_cmd* lcmd)
 			buf[i] = 0;
 			if (!eol)
 				loc_line_nr += line_nr_incr;
+			// coverity[tainted_data]
 			get_loc_data_line(buf);
 			break;
 		case '\r':
@@ -567,20 +564,24 @@ out:
 
 /*
  * Parse a line of UTF-16 text and return the data if it matches the 'token'
- * The parsed line is of the form: [ ]token[ ]=[ ]["]data["][ ] and is
+ * The parsed line is of the form: [ ][<][ ]token[ ][=|>][ ]["]data["][ ][<] and is
  * modified by the parser
  */
 static wchar_t* get_token_data_line(const wchar_t* wtoken, wchar_t* wline)
 {
 	size_t i, r;
 	BOOLEAN quoteth = FALSE;
+	BOOLEAN xml = FALSE;
 
 	if ((wtoken == NULL) || (wline == NULL) || (wline[0] == 0))
 		return NULL;
 
 	i = 0;
 
-	// Skip leading spaces
+	// Skip leading spaces and opening '<'
+	i += wcsspn(&wline[i], wspace);
+	if (wline[i] == L'<')
+		i++;
 	i += wcsspn(&wline[i], wspace);
 
 	// Our token should begin a line
@@ -593,12 +594,14 @@ static wchar_t* get_token_data_line(const wchar_t* wtoken, wchar_t* wline)
 	// Skip spaces
 	i += wcsspn(&wline[i], wspace);
 
-	// Check for an equal sign
-	if (wline[i] != L'=')
+	// Check for '=' or '>' sign
+	if (wline[i] == L'>')
+		xml = TRUE;
+	else if (wline[i] != L'=')
 		return NULL;
 	i++;
 
-	// Skip spaces after equal sign
+	// Skip spaces
 	i += wcsspn(&wline[i], wspace);
 
 	// eliminate leading quote, if it exists
@@ -611,7 +614,7 @@ static wchar_t* get_token_data_line(const wchar_t* wtoken, wchar_t* wline)
 	r = i;
 
 	// locate end of string or quote
-	while ( (wline[i] != 0) && ((wline[i] != L'"') || ((wline[i] == L'"') && (!quoteth))) )
+	while ( (wline[i] != 0) && (((wline[i] != L'"') && (wline[i] != L'<')) || ((wline[i] == L'"') && (!quoteth)) || ((wline[i] == L'<') && (!xml))) )
 		i++;
 	wline[i--] = 0;
 
@@ -623,11 +626,12 @@ static wchar_t* get_token_data_line(const wchar_t* wtoken, wchar_t* wline)
 }
 
 /*
- * Parse a file (ANSI or UTF-8 or UTF-16) and return the data for the first occurrence of 'token'
+ * Parse a file (ANSI or UTF-8 or UTF-16) and return the data for the 'index'th occurrence of 'token'
  * The returned string is UTF-8 and MUST be freed by the caller
  */
-char* get_token_data_file(const char* token, const char* filename)
+char* get_token_data_file_indexed(const char* token, const char* filename, int index)
 {
+	int i = 0;
 	wchar_t *wtoken = NULL, *wdata= NULL, *wfilename = NULL;
 	wchar_t buf[1024];
 	FILE* fd = NULL;
@@ -644,7 +648,7 @@ char* get_token_data_file(const char* token, const char* filename)
 		goto out;
 	}
 	wtoken = utf8_to_wchar(token);
-	if (wfilename == NULL) {
+	if (wtoken == NULL) {
 		uprintf(conversion_error, token);
 		goto out;
 	}
@@ -655,7 +659,7 @@ char* get_token_data_file(const char* token, const char* filename)
 	// Ideally, we'd check that our buffer fits the line
 	while (fgetws(buf, ARRAYSIZE(buf), fd) != NULL) {
 		wdata = get_token_data_line(wtoken, buf);
-		if (wdata != NULL) {
+		if ((wdata != NULL) && (++i == index)) {
 			ret = wchar_to_utf8(wdata);
 			break;
 		}
@@ -693,7 +697,7 @@ char* set_token_data_file(const char* token, const char* data, const char* filen
 		goto out;
 	}
 	wtoken = utf8_to_wchar(token);
-	if (wfilename == NULL) {
+	if (wtoken == NULL) {
 		uprintf(conversion_error, token);
 		goto out;
 	}
@@ -779,24 +783,33 @@ char* set_token_data_file(const char* token, const char* data, const char* filen
 		fputws(buf, fd_out);
 
 		// Now output the new data
-		fwprintf(fd_out, L"%s\n", wdata);
+		// coverity[invalid_type]
+		fwprintf_s(fd_out, L"%s\n", wdata);
 		ret = (char*)data;
 	}
 
 	if (ret == NULL) {
 		// Didn't find an existing token => append it
-		fwprintf(fd_out, L"%s = %s\n", wtoken, wdata);
+		// coverity[invalid_type]
+		fwprintf_s(fd_out, L"%s = %s\n", wtoken, wdata);
 		ret = (char*)data;
 	}
 
 out:
-	if (fd_in != NULL) fclose(fd_in);
-	if (fd_out != NULL) fclose(fd_out);
+	if (fd_in != NULL) {
+		fclose(fd_in);
+		fd_in = NULL;
+	}
+	if (fd_out != NULL) {
+		fclose(fd_out);
+		fd_out = NULL;
+	}
 
 	// If an insertion occurred, delete existing file and use the new one
 	if (ret != NULL) {
 		// We're in Windows text mode => Remove CRs if requested
-		fd_in = _wfopen(wtmpname, L"rb");
+		if (wtmpname != NULL)
+			fd_in = _wfopen(wtmpname, L"rb");
 		fd_out = _wfopen(wfilename, L"wb");
 		// Don't check fds
 		if ((fd_in != NULL) && (fd_out != NULL)) {
@@ -900,9 +913,11 @@ void parse_update(char* buf, size_t len)
 	char *data = NULL, *token;
 	char allowed_rtf_chars[] = "abcdefghijklmnopqrstuvwxyz|~-_:*'";
 	char allowed_std_chars[] = "\r\n ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"$%^&+=<>(){}[].,;#@/?";
+	char download_url_name[24];
+	char *arch_names[5] = { "unknown", "x86", "x64", "arm", "arm64" };
 
 	// strchr includes the NUL terminator in the search, so take care of backslash before NUL
-	if ((buf == NULL) || (len < 2) || (len > 65536) || (buf[len-1] != 0) || (buf[len-2] == '\\'))
+	if ((buf == NULL) || (len < 2) || (len > 64 * KB) || (buf[len-1] != 0) || (buf[len-2] == '\\'))
 		return;
 	// Sanitize the data - Not a silver bullet, but it helps
 	len = safe_strlen(buf)+1;	// Someone may be inserting NULs
@@ -936,7 +951,10 @@ void parse_update(char* buf, size_t len)
 		}
 		safe_free(data);
 	}
-	update.download_url = get_sanitized_token_data_buffer("download_url", 1, buf, len);
+	static_sprintf(download_url_name, "download_url_%s", arch_names[GetCpuArch()]);
+	update.download_url = get_sanitized_token_data_buffer(download_url_name, 1, buf, len);
+	if (update.download_url == NULL)
+		update.download_url = get_sanitized_token_data_buffer("download_url", 1, buf, len);
 	update.release_notes = get_sanitized_token_data_buffer("release_notes", 1, buf, len);
 }
 
@@ -965,7 +983,7 @@ char* insert_section_data(const char* filename, const char* section, const char*
 		goto out;
 	}
 	wsection = utf8_to_wchar(section);
-	if (wfilename == NULL) {
+	if (wsection == NULL) {
 		uprintf(conversion_error, section);
 		goto out;
 	}
@@ -1031,7 +1049,8 @@ char* insert_section_data(const char* filename, const char* section, const char*
 		// Section was found, output it
 		fputws(buf, fd_out);
 		// Now output the new data
-		fwprintf(fd_out, L"%s\n", wdata);
+		// coverity[invalid_type]
+		fwprintf_s(fd_out, L"%s\n", wdata);
 		ret = (char*)data;
 	}
 
@@ -1040,7 +1059,7 @@ out:
 	if (fd_out != NULL) fclose(fd_out);
 
 	// If an insertion occurred, delete existing file and use the new one
-	if (ret != NULL) {
+	if (ret != NULL && wtmpname != NULL && wfilename != NULL) {
 		// We're in Windows text mode => Remove CRs if requested
 		fd_in = _wfopen(wtmpname, L"rb");
 		fd_out = _wfopen(wfilename, L"wb");
@@ -1075,20 +1094,22 @@ out:
  * it with 'rep'. File can be ANSI or UNICODE and is overwritten. Parameters are UTF-8.
  * The parsed line is of the form: [ ]token[ ]data
  * Returns a pointer to rep if replacement occurred, NULL otherwise
+ * TODO: We might have to end up with a regexp engine, so that we can do stuff like: "foo*" -> "bar\1"
  */
+#define MAX_OCCURRENCES 4
 char* replace_in_token_data(const char* filename, const char* token, const char* src, const char* rep, BOOL dos2unix)
 {
 	const wchar_t* outmode[] = { L"w", L"w, ccs=UTF-8", L"w, ccs=UTF-16LE" };
 	wchar_t *wtoken = NULL, *wfilename = NULL, *wtmpname = NULL, *wsrc = NULL, *wrep = NULL, bom = 0;
-	wchar_t buf[1024], *torep;
+	wchar_t buf[1024], *torep[MAX_OCCURRENCES + 1] = { NULL };
 	FILE *fd_in = NULL, *fd_out = NULL;
-	size_t i, size;
+	size_t i, j, p[MAX_OCCURRENCES + 1] = { 0 }, ns, size;
 	int mode = 0;
 	char *ret = NULL, tmp[2];
 
 	if ((filename == NULL) || (token == NULL) || (src == NULL) || (rep == NULL))
 		return NULL;
-	if ((filename[0] == 0) || (token[0] == 0) || (src[0] == 0) || (rep[0] == 0))
+	if ((filename[0] == 0) || (token[0] == 0) || (src[0] == 0))
 		return NULL;
 	if (strcmp(src, rep) == 0)	// No need for processing is source is same as replacement
 		return NULL;
@@ -1099,7 +1120,7 @@ char* replace_in_token_data(const char* filename, const char* token, const char*
 		goto out;
 	}
 	wtoken = utf8_to_wchar(token);
-	if (wfilename == NULL) {
+	if (wtoken == NULL) {
 		uprintf(conversion_error, token);
 		goto out;
 	}
@@ -1109,7 +1130,7 @@ char* replace_in_token_data(const char* filename, const char* token, const char*
 		goto out;
 	}
 	wrep = utf8_to_wchar(rep);
-	if (wsrc == NULL) {
+	if (wrep == NULL) {
 		uprintf(conversion_error, rep);
 		goto out;
 	}
@@ -1121,7 +1142,8 @@ char* replace_in_token_data(const char* filename, const char* token, const char*
 	}
 	// Check the input file's BOM and create an output file with the same
 	if (fread(&bom, sizeof(bom), 1, fd_in) != 1) {
-		uprintf("Could not read file '%s'\n", filename);
+		if (!feof(fd_in))
+			uprintf("Could not read file '%s'\n", filename);
 		goto out;
 	}
 	switch(bom) {
@@ -1138,7 +1160,6 @@ char* replace_in_token_data(const char* filename, const char* token, const char*
 	fseek(fd_in, 0, SEEK_SET);
 //	duprintf("'%s' was detected as %s\n", filename,
 //		(mode==0)?"ANSI/UTF8 (no BOM)":((mode==1)?"UTF8 (with BOM)":"UTF16 (with BOM"));
-
 
 	wtmpname = (wchar_t*)calloc(wcslen(wfilename)+2, sizeof(wchar_t));
 	if (wtmpname == NULL) {
@@ -1171,18 +1192,42 @@ char* replace_in_token_data(const char* filename, const char* token, const char*
 		// Token was found, move past token
 		i += wcslen(wtoken);
 
-		// Skip spaces
-		i += wcsspn(&buf[i], wspace);
+		// Skip whitespaces after token (while making sure there's at least one)
+		ns = wcsspn(&buf[i], wspace);
+		if (ns == 0) {
+			fputws(buf, fd_out);
+			continue;
+		}
+		i += ns;
 
-		torep = wcsstr(&buf[i], wsrc);
-		if (torep == NULL) {
+		// p[x] = starting position of the fragment with the replaceable string
+		p[0] = 0;
+		for (j = 0; j < MAX_OCCURRENCES; j++) {
+			torep[j] = wcsstr(&buf[i], wsrc);
+			if (torep[j] == NULL)
+				break;
+			// Next fragment will start after current + replaced string
+			i = (torep[j] - buf) + wcslen(wsrc);
+			p[j + 1] = i;
+			// Truncate each fragment to before the replaced string
+			*torep[j] = 0;
+		}
+
+		// No replaceable string found => output as is
+		if (torep[0] == NULL) {
 			fputws(buf, fd_out);
 			continue;
 		}
 
-		i = (torep-buf) + wcslen(wsrc);
-		*torep = 0;
-		fwprintf(fd_out, L"%s%s%s", buf, wrep, &buf[i]);
+		// Output all the truncated fragments + replaced strings
+		for (j = 0; torep[j] != NULL; j++)
+			// coverity[invalid_type]
+			fwprintf_s(fd_out, L"%s%s", &buf[p[j]], wrep);
+
+		// Output the last fragment
+		// coverity[invalid_type]
+		fwprintf_s(fd_out, L"%s", &buf[p[j]]);
+
 		ret = (char*)rep;
 	}
 
@@ -1191,7 +1236,7 @@ out:
 	if (fd_out != NULL) fclose(fd_out);
 
 	// If a replacement occurred, delete existing file and use the new one
-	if (ret != NULL) {
+	if (ret != NULL && wtmpname != NULL && wfilename != NULL) {
 		// We're in Windows text mode => Remove CRs if requested
 		fd_in = _wfopen(wtmpname, L"rb");
 		fd_out = _wfopen(wfilename, L"wb");
@@ -1223,7 +1268,7 @@ out:
 }
 
 /*
- * Replace all 'c' characters in string 'src' with the subtsring 'rep'
+ * Replace all 'c' characters in string 'src' with the substring 'rep'
  * The returned string is allocated and must be freed by the caller.
  */
 char* replace_char(const char* src, const char c, const char* rep)
@@ -1238,14 +1283,201 @@ char* replace_char(const char* src, const char c, const char* rep)
 			count++;
 	}
 	res = (char*)malloc(str_len + count*rep_len + 1);
+	if (res == NULL)
+		return NULL;
 	for (i=0,j=0; i<str_len; i++) {
 		if (src[i] == c) {
 			for(k=0; k<rep_len; k++)
 				res[j++] = rep[k];
 		} else {
+// Since the VS Code Analysis tool is dumb...
+#if defined(_MSC_VER)
+#pragma warning(suppress: 6386)
+#endif
 			res[j++] = src[i];
 		}
 	}
 	res[j] = 0;
 	return res;
+}
+
+/*
+ * Internal recursive call for get_data_from_asn1(). Returns FALSE on error, TRUE otherwise.
+ */
+static BOOL get_data_from_asn1_internal(const uint8_t* buf, size_t buf_len, const void* oid,
+			size_t oid_len, uint8_t asn1_type, void** data, size_t* data_len, BOOL* matched)
+{
+	size_t pos = 0, len, len_len, i;
+	uint8_t tag;
+	BOOL is_sequence, is_universal_tag;
+
+	while (pos < buf_len) {
+		is_sequence = buf[pos] & 0x20;
+		is_universal_tag = ((buf[pos] & 0xC0) == 0x00);
+		tag = buf[pos++] & 0x1F;
+		if (tag == 0x1F) {
+			uprintf("get_data_from_asn1: Long form tags are unsupported");
+			return FALSE;
+		}
+
+		// Compute the length
+		len = 0;
+		len_len = 1;
+		if ((is_universal_tag) && (tag == 0x05)) {	// ignore "NULL" tag
+			pos++;
+		} else {
+			if (buf[pos] & 0x80) {
+				len_len = buf[pos++] & 0x7F;
+				// The data we're dealing with is not expected to ever be larger than 64K
+				if (len_len > 2) {
+					uprintf("get_data_from_asn1: Length fields larger than 2 bytes are unsupported");
+					return FALSE;
+				}
+				for (i = 0; i < len_len; i++) {
+					len <<= 8;
+					len += buf[pos++];
+				}
+			} else {
+				len = buf[pos++];
+			}
+
+			if (len > buf_len - pos) {
+				uprintf("get_data_from_asn1: Overflow error (computed length %d is larger than remaining data)", len);
+				return FALSE;
+			}
+		}
+
+		if (len != 0) {
+			if (is_sequence) {
+				if (!get_data_from_asn1_internal(&buf[pos], len, oid, oid_len, asn1_type, data, data_len, matched))
+					return FALSE;	// error
+				if (*data != NULL)
+					return TRUE;
+			} else if (is_universal_tag) {	// Only process tags that belong to the UNIVERSAL class
+				// NB: 0x06 = "OID" tag
+				if ((!*matched) && (tag == 0x06) && (len == oid_len) && (memcmp(&buf[pos], oid, oid_len) == 0)) {
+					*matched = TRUE;
+				} else if ((*matched) && (tag == asn1_type)) {
+					*data_len = len;
+					*data = (void*)&buf[pos];
+					return TRUE;
+				}
+			}
+			pos += len;
+		}
+	};
+
+	return TRUE;
+}
+
+/*
+ * Helper functions to convert an OID string to an OID byte array
+ * Taken from from openpgp-oid.c
+ */
+static size_t make_flagged_int(unsigned long value, uint8_t *buf, size_t buf_len)
+{
+	BOOL more = FALSE;
+	int shift;
+
+	for (shift = 28; shift > 0; shift -= 7) {
+		if (more || value >= ((unsigned long)1 << shift)) {
+			buf[buf_len++] = (uint8_t) (0x80 | (value >> shift));
+			value -= (value >> shift) << shift;
+			more = TRUE;
+		}
+	}
+	buf[buf_len++] = (uint8_t) value;
+	return buf_len;
+}
+
+/*
+ * Convert OID string 'oid_str' to an OID byte array of size 'ret_len'
+ * The returned array must be freed by the caller.
+ */
+static uint8_t* oid_from_str(const char* oid_str, size_t* ret_len)
+{
+	uint8_t* oid = NULL;
+	unsigned long val1 = 0, val;
+	const char *endp;
+	int arcno = 0;
+	size_t oid_len = 0;
+
+	if ((oid_str == NULL) || (oid_str[0] == 0))
+		return NULL;
+
+	// We can safely assume that the encoded OID is shorter than the string.
+	oid = malloc(1 + strlen(oid_str) + 2);
+	if (oid == NULL)
+		return NULL;
+
+	do {
+		arcno++;
+		val = strtoul(oid_str, (char**)&endp, 10);
+		if (!isdigit(*oid_str) || !(*endp == '.' || !*endp))
+			goto err;
+		if (*endp == '.')
+			oid_str = endp + 1;
+
+		if (arcno == 1) {
+			if (val > 2)
+				break; // Not allowed, error caught below.
+			val1 = val;
+		} else if (arcno == 2) {
+			// Need to combine the first two arcs in one byte.
+			if (val1 < 2) {
+				if (val > 39)
+					goto err;
+				oid[oid_len++] = (uint8_t)(val1 * 40 + val);
+			} else {
+				val += 80;
+				oid_len = make_flagged_int(val, oid, oid_len);
+			}
+		} else {
+			oid_len = make_flagged_int(val, oid, oid_len);
+		}
+	} while (*endp == '.');
+
+	// It is not possible to encode only the first arc.
+	if (arcno == 1 || oid_len < 2 || oid_len > 254)
+		goto err;
+
+	*ret_len = oid_len;
+	return oid;
+
+err:
+	free(oid);
+	return NULL;
+}
+
+/*
+ * Parse an ASN.1 binary buffer and return a pointer to the first instance of OID data of type 'asn1_type',
+ * matching the OID 'oid_str' (expressed as an OID string). If successful, the length or the returned data
+ * is placed in 'data_len'. Note: Only the UNIVERSAL class is supported for 'asn1_type' (other classes are
+ * ignored). If 'oid_str' is NULL or empty, the first data element of type 'asn1_type' is returned.
+ */
+void* get_data_from_asn1(const uint8_t* buf, size_t buf_len, const char* oid_str, uint8_t asn1_type, size_t* data_len)
+{
+	void* data = NULL;
+	uint8_t* oid = NULL;
+	size_t oid_len = 0;
+	BOOL matched = ((oid_str == NULL) || (oid_str[0] == 0));
+
+	if (buf_len >= 65536) {
+		uprintf("get_data_from_asn1: Buffers larger than 64KB are not supported");
+		return NULL;
+	}
+
+	if (!matched) {
+		// We have an OID string to convert
+		oid = oid_from_str(oid_str, &oid_len);
+		if (oid == NULL) {
+			uprintf("get_data_from_asn1: Could not convert OID string '%s'", oid_str);
+			return NULL;
+		}
+	}
+
+	// No need to check for the return value as data is always NULL on error
+	get_data_from_asn1_internal(buf, buf_len, oid, oid_len, asn1_type, &data, data_len, &matched);
+	free(oid);
+	return data;
 }

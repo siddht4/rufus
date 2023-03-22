@@ -1,21 +1,11 @@
-o KERNEL.SYS was extracted from ke2041_386f32.zip available at:
-  https://sourceforge.net/projects/freedos/files/Kernel/2041/
+All of the executables found in this repository where extracted from:
+https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.3/official/FD13-FullUSB.zip
+
+o COMMAND.COM was extracted from packages\base\freecom.zip
+o DISPLAY.EXE was extracted from packages\base\display.zip
+o The EGA[#].CPX files were extracted from packages\base\cpidos.zip
+o KERNEL.SYS was taken from packages\base\kernel.zip (KERNL386.SYS)
   It was modified to have FORCELBA enabled (byte offset 0x0D set to 0x01)
-
-o COMMAND.COM was extracted from the fd11src.iso -> ISOLINUX\FDBOOT.IMG at:
-  http://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.1/
-
-o The EGA files were extracted from the cpidos30.zip available at:
-  http://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/dos/cpi/
-
-o DISPLAY.EXE was extracted from /disp013x.zip available at:
-  http://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/dos/display
-
-o KEYB.EXE was extracted from KEYB201.ZIP available at:
-  http://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/dos/keyb/2.01/
-  
-o The keyboard layouts (KEYB___.SYS) were extracted from kpdos31x.zip:
-  http://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/dos/keyb/kblayout/
-
-o MODE.COM was extracted from mode-2005may12.zip available at:
-  http://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/dos/mode/2005/
+o KEYB.EXE was extracted from packages\base\keyb.zip
+o The KEYB###.SYS keyboard layouts were extracted from packages\base\keyb_lay.zip
+o MODE.COM was extracted from packages\base\mode.zip

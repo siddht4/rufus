@@ -1,7 +1,7 @@
 /*
  * Rufus: The Reliable USB Formatting Utility
  * Extract icon from executable and set autorun.inf
- * Copyright © 2012-2016 Pete Batard <pete@akeo.ie>
+ * Copyright © 2012-2021 Pete Batard <pete@akeo.ie>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +26,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
 
 #include "rufus.h"
 #include "missing.h"
@@ -86,9 +87,9 @@ typedef struct
 #pragma pack(pop)
 
 /*
- * Extract an icon set from the exe and save it as .ico
+ * Extract the main icon set from the exe
  */
-static BOOL SaveIcon(const char* filename)
+BOOL ExtractAppIcon(const char* path, BOOL bSilent)
 {
 	HGLOBAL res_handle;
 	HRSRC res;
@@ -101,10 +102,10 @@ static BOOL SaveIcon(const char* filename)
 
 	icondir = (GRPICONDIR*)GetResource(hMainInstance, MAKEINTRESOURCEA(IDI_ICON), _RT_GROUP_ICON, "icon", &res_size, FALSE);
 
-	hFile = CreateFileA(filename, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ|FILE_SHARE_WRITE,
-			NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+	hFile = CreateFileU(path, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ,
+			NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE) {
-		uprintf("Unable to create icon '%s': %s.", filename, WindowsErrorString());
+		uprintf("Unable to create icon '%s': %s.", path, WindowsErrorString());
 		goto out;
 	}
 
@@ -141,7 +142,7 @@ static BOOL SaveIcon(const char* filename)
 			goto out;
 		}
 	}
-	uprintf("Created: %s", filename);
+	suprintf("Created: %s", path);
 	r = TRUE;
 
 out:
@@ -160,7 +161,7 @@ BOOL SetAutorun(const char* path)
 	char filename[64];
 	wchar_t wlabel[128], wRufusVersion[32];
 
-	safe_sprintf(filename, sizeof(filename), "%sautorun.inf", path);
+	static_sprintf(filename, "%sautorun.inf", path);
 	fd = fopen(filename, "r");	// If there's an existing autorun, don't overwrite
 	if (fd != NULL) {
 		uprintf("%s already exists - keeping it", filename);
@@ -171,20 +172,22 @@ BOOL SetAutorun(const char* path)
 	fd = fopen(filename, "w, ccs=UTF-16LE");
 	if (fd == NULL) {
 		uprintf("Unable to create %s", filename);
-		uprintf("NOTE: This may be caused by a poorly designed security solution. "
-			"See http://rufus.akeo.ie/compatibility.");
+		uprintf("NOTE: This may be caused by a poorly designed security solution. See https://goo.gl/QTobxX.");
 		return FALSE;
 	}
 
 	GetWindowTextW(hLabel, wlabel, ARRAYSIZE(wlabel));
 	GetWindowTextW(hMainDialog, wRufusVersion, ARRAYSIZE(wRufusVersion));
-	fwprintf(fd, L"; Created by %s\n; " LTEXT(RUFUS_URL) L"\n", wRufusVersion);
-	fwprintf(fd, L"[autorun]\nicon  = autorun.ico\nlabel = %s\n", wlabel);
+	// coverity[invalid_type]
+	fwprintf_s(fd, L"; Created by %s\n; " LTEXT(RUFUS_URL) L"\n", wRufusVersion);
+	// coverity[invalid_type]
+	fwprintf_s(fd, L"[autorun]\nicon  = autorun.ico\nlabel = %s\n", wlabel);
 	fclose(fd);
 	uprintf("Created: %s", filename);
 
 	// .inf -> .ico
-	filename[strlen(filename)-1] = 'o';
-	filename[strlen(filename)-2] = 'c';
-	return SaveIcon(filename);
+	assert(strlen(filename) >= 2);
+	filename[strlen(filename) - 1] = 'o';
+	filename[strlen(filename) - 2] = 'c';
+	return ExtractAppIcon(filename, FALSE);
 }

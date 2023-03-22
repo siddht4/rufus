@@ -1,34 +1,17 @@
 /*
- * badblocks.c		- Bad blocks checker
+ * badblocks.c - Bad blocks checker
  *
- * Copyright (C) 1992, 1993, 1994  Remy Card <card@masi.ibp.fr>
- *                                 Laboratoire MASI, Institut Blaise Pascal
- *                                 Universite Pierre et Marie Curie (Paris VI)
- *
- * Copyright 1995, 1996, 1997, 1998, 1999 by Theodore Ts'o
- * Copyright 1999 by David Beattie
- * Copyright 2011-2016 by Pete Batard
+ * Copyright 1992-1994 Remy Card <card@masi.ibp.fr>
+ * Copyright 1995-1999 Theodore Ts'o
+ * Copyright 1999 David Beattie
+ * Copyright 2011-2019 Pete Batard <pete@akeo.ie>
  *
  * This file is based on the minix file system programs fsck and mkfs
  * written and copyrighted by Linus Torvalds <Linus.Torvalds@cs.helsinki.fi>
  *
  * %Begin-Header%
- * This file may be redistributed under the terms of the GNU Public
- * License.
+ * This file may be redistributed under the terms of the GNU Public License.
  * %End-Header%
- */
-
-/*
- * History:
- * 93/05/26	- Creation from e2fsck
- * 94/02/27	- Made a separate bad blocks checker
- * 99/06/30...99/07/26 - Added non-destructive write-testing,
- *                       configurable blocks-at-once parameter,
- * 			 loading of badblocks list to avoid testing
- * 			 blocks known to be bad, multiple passes to
- * 			 make sure that no new blocks are added to the
- * 			 list.  (Work done by David Beattie)
- * 11/12/04	- Windows/Rufus integration (Pete Batard)
  */
 
 #include <errno.h>
@@ -50,8 +33,8 @@
 #include "file.h"
 
 FILE* log_fd = NULL;
-static const char* abort_msg = "Too many bad blocks, aborting test\n";
-static const char* bb_prefix = "Bad Blocks: ";
+static const char abort_msg[] = "Too many bad blocks, aborting test\n";
+static const char bb_prefix[] = "Bad Blocks: ";
 
 /*
  *From e2fsprogs/lib/ext2fs/badblocks.c
@@ -84,16 +67,16 @@ static errcode_t make_u64_list(int size, int num, uint64_t *list, bb_u64_list *r
 	bb->magic = BB_ET_MAGIC_BADBLOCKS_LIST;
 	bb->size = size ? size : 10;
 	bb->num = num;
-	bb->list = malloc(sizeof(blk_t) * bb->size);
+	bb->list = malloc(sizeof(blk64_t) * bb->size);
 	if (bb->list == NULL) {
 		free(bb);
 		bb = NULL;
 		return BB_ET_NO_MEMORY;
 	}
 	if (list)
-		memcpy(bb->list, list, bb->size * sizeof(blk_t));
+		memcpy(bb->list, list, bb->size * sizeof(blk64_t));
 	else
-		memset(bb->list, 0, bb->size * sizeof(blk_t));
+		memset(bb->list, 0, bb->size * sizeof(blk64_t));
 	*ret = bb;
 	return 0;
 }
@@ -124,6 +107,7 @@ static errcode_t bb_u64_list_add(bb_u64_list bb, uint64_t blk)
 			bb->size -= 100;
 			return BB_ET_NO_MEMORY;
 		}
+		// coverity[suspicious_sizeof]
 		memset(&bb->list[bb->size-100], 0, 100 * sizeof(uint64_t));
 	}
 
@@ -154,7 +138,7 @@ static errcode_t bb_u64_list_add(bb_u64_list bb, uint64_t blk)
 	return 0;
 }
 
-static errcode_t bb_badblocks_list_add(bb_badblocks_list bb, blk_t blk)
+static errcode_t bb_badblocks_list_add(bb_badblocks_list bb, blk64_t blk)
 {
 	return bb_u64_list_add((bb_u64_list) bb, blk);
 }
@@ -163,7 +147,7 @@ static errcode_t bb_badblocks_list_add(bb_badblocks_list bb, blk_t blk)
  * This procedure finds a particular block is on a badblocks
  * list.
  */
-static int bb_u64_list_find(bb_u64_list bb, uint64_t blk)
+static int bb_u64_list_find(bb_u64_list bb, blk64_t blk)
 {
 	int	low, high, mid;
 
@@ -198,7 +182,7 @@ static int bb_u64_list_find(bb_u64_list bb, uint64_t blk)
  * This procedure tests to see if a particular block is on a badblocks
  * list.
  */
-static int bb_u64_list_test(bb_u64_list bb, uint64_t blk)
+static int bb_u64_list_test(bb_u64_list bb, blk64_t blk)
 {
 	if (bb_u64_list_find(bb, blk) < 0)
 		return 0;
@@ -206,12 +190,12 @@ static int bb_u64_list_test(bb_u64_list bb, uint64_t blk)
 		return 1;
 }
 
-static int bb_badblocks_list_test(bb_badblocks_list bb, blk_t blk)
+static int bb_badblocks_list_test(bb_badblocks_list bb, blk64_t blk)
 {
 	return bb_u64_list_test((bb_u64_list) bb, blk);
 }
 
-static int bb_u64_list_iterate(bb_u64_iterate iter, uint64_t *blk)
+static int bb_u64_list_iterate(bb_u64_iterate iter, blk64_t *blk)
 {
 	bb_u64_list bb;
 
@@ -231,7 +215,7 @@ static int bb_u64_list_iterate(bb_u64_iterate iter, uint64_t *blk)
 	return 0;
 }
 
-static int bb_badblocks_list_iterate(bb_badblocks_iterate iter, blk_t *blk)
+static int bb_badblocks_list_iterate(bb_badblocks_iterate iter, blk64_t *blk)
 {
 	return bb_u64_list_iterate((bb_u64_iterate) iter, blk);
 }
@@ -246,36 +230,28 @@ static int cur_pattern, nr_pattern;
 static int cur_op;
 /* Abort test if more than this number of bad blocks has been encountered */
 static unsigned int max_bb = BB_BAD_BLOCKS_THRESHOLD;
-static blk_t currently_testing = 0;
-static blk_t num_blocks = 0;
+static blk64_t currently_testing = 0;
+static blk64_t num_blocks = 0;
 static uint32_t num_read_errors = 0;
 static uint32_t num_write_errors = 0;
 static uint32_t num_corruption_errors = 0;
 static bb_badblocks_list bb_list = NULL;
-static blk_t next_bad = 0;
+static blk64_t next_bad = 0;
 static bb_badblocks_iterate bb_iter = NULL;
 
 static __inline void *allocate_buffer(size_t size) {
-#ifdef __MINGW32__
-	return __mingw_aligned_malloc(size, BB_SYS_PAGE_SIZE);
-#else
-	return _aligned_malloc(size, BB_SYS_PAGE_SIZE);
-#endif
+	return _mm_malloc(size, BB_SYS_PAGE_SIZE);
 }
 
 static __inline void free_buffer(void* p) {
-#ifdef __MINGW32__
-	__mingw_aligned_free(p);
-#else
-	_aligned_free(p);
-#endif
+	_mm_free(p);
 }
 
 /*
  * This routine reports a new bad block.  If the bad block has already
  * been seen before, then it returns 0; otherwise it returns 1.
  */
-static int bb_output (blk_t bad, enum error_types error_type)
+static int bb_output (blk64_t bad, enum error_types error_type)
 {
 	errcode_t error_code;
 
@@ -357,11 +333,14 @@ static void pattern_fill(unsigned char *buffer, unsigned int pattern,
 	unsigned char	bpattern[sizeof(pattern)], *ptr;
 
 	if (pattern == (unsigned int) ~0) {
+		PrintInfo(3500, MSG_236);
+		srand((unsigned int)GetTickCount64());
 		for (ptr = buffer; ptr < buffer + n; ptr++) {
+			// coverity[dont_call]
 			(*ptr) = rand() % (1 << (8 * sizeof(char)));
 		}
-		PrintInfo(3500, MSG_236);
 	} else {
+		PrintInfo(3500, MSG_237, pattern);
 		bpattern[0] = 0;
 		for (i = 0; i < sizeof(bpattern); i++) {
 			if (pattern == 0)
@@ -377,7 +356,6 @@ static void pattern_fill(unsigned char *buffer, unsigned int pattern,
 			else
 				i--;
 		}
-		PrintInfo(3500, MSG_237, bpattern[i]);
 		cur_pattern++;
 	}
 }
@@ -386,8 +364,8 @@ static void pattern_fill(unsigned char *buffer, unsigned int pattern,
  * Perform a read of a sequence of blocks; return the number of blocks
  *    successfully sequentially read.
  */
-static int64_t do_read (HANDLE hDrive, unsigned char * buffer, uint64_t tryout, uint64_t block_size,
-		    blk_t current_block)
+static int64_t do_read (HANDLE hDrive, unsigned char * buffer, uint64_t tryout,
+					    uint64_t block_size, blk64_t current_block)
 {
 	int64_t got;
 
@@ -408,8 +386,8 @@ static int64_t do_read (HANDLE hDrive, unsigned char * buffer, uint64_t tryout, 
  * Perform a write of a sequence of blocks; return the number of blocks
  *    successfully sequentially written.
  */
-static int64_t do_write(HANDLE hDrive, unsigned char * buffer, uint64_t tryout, uint64_t block_size,
-		    blk_t current_block)
+static int64_t do_write(HANDLE hDrive, unsigned char * buffer, uint64_t tryout,
+					    uint64_t block_size, blk64_t current_block)
 {
 	int64_t got;
 
@@ -426,53 +404,66 @@ static int64_t do_write(HANDLE hDrive, unsigned char * buffer, uint64_t tryout, 
 	return got;
 }
 
-static unsigned int test_rw(HANDLE hDrive, blk_t last_block, size_t block_size, blk_t first_block,
-	size_t blocks_at_once, int nb_passes)
+static unsigned int test_rw(HANDLE hDrive, blk64_t last_block, size_t block_size, blk64_t first_block,
+							size_t blocks_at_once, int pattern_type, int nb_passes)
 {
+	const unsigned int pattern[BADLOCKS_PATTERN_TYPES][BADBLOCK_PATTERN_COUNT] =
+		{ BADBLOCK_PATTERN_ONE_PASS, BADBLOCK_PATTERN_TWO_PASSES, BADBLOCK_PATTERN_SLC,
+		  BADCLOCK_PATTERN_MLC, BADBLOCK_PATTERN_TLC };
 	unsigned char *buffer = NULL, *read_buffer;
-	const unsigned int pattern[] = BADBLOCK_PATTERNS;
 	int i, pat_idx;
 	unsigned int bb_count = 0;
-	blk_t got, tryout, recover_block = ~0, *blk_id;
-	size_t id_offset;
+	blk64_t got, tryout, recover_block = ~0, *blk_id;
+	size_t id_offset = 0;
 
-	if ((nb_passes < 1) || (nb_passes > 4)) {
+	if ((pattern_type < 0) || (pattern_type >= BADLOCKS_PATTERN_TYPES)) {
+		uprintf("%sInvalid pattern type\n", bb_prefix);
+		cancel_ops = -1;
+		return 0;
+	}
+	if ((nb_passes < 1) || (nb_passes > BADBLOCK_PATTERN_COUNT)) {
 		uprintf("%sInvalid number of passes\n", bb_prefix);
 		cancel_ops = -1;
 		return 0;
 	}
 
 	buffer = allocate_buffer(2 * blocks_at_once * block_size);
-	read_buffer = buffer + blocks_at_once * block_size;
-
 	if (!buffer) {
 		uprintf("%sError while allocating buffers\n", bb_prefix);
 		cancel_ops = -1;
 		return 0;
 	}
+	read_buffer = buffer + blocks_at_once * block_size;
 
-	uprintf("%sChecking from block %lu to %lu\n", bb_prefix,
-		(unsigned long) first_block, (unsigned long) last_block - 1);
+	uprintf("%sChecking from block %lu to %lu (1 block = %s)\n", bb_prefix,
+		(unsigned long) first_block, (unsigned long) last_block - 1,
+		SizeToHumanReadable(BADBLOCK_BLOCK_SIZE, FALSE, FALSE));
 	nr_pattern = nb_passes;
 	cur_pattern = 0;
 
 	for (pat_idx = 0; pat_idx < nb_passes; pat_idx++) {
-		if (cancel_ops) goto out;
-		id_offset = rand() * (block_size-sizeof(blk_t)) / RAND_MAX;
-		pattern_fill(buffer, pattern[pat_idx], blocks_at_once * block_size);
-		uprintf("%sUsing offset %d for fake device check\n", bb_prefix, id_offset);
+		if (cancel_ops)
+			goto out;
+		if (detect_fakes && (pat_idx == 0)) {
+			srand((unsigned int)GetTickCount64());
+			id_offset = rand() * (block_size - sizeof(blk64_t)) / RAND_MAX;
+			uprintf("%sUsing offset %d for fake device check\n", bb_prefix, id_offset);
+		}
+		// coverity[dont_call]
+		pattern_fill(buffer, pattern[pattern_type][pat_idx], blocks_at_once * block_size);
 		num_blocks = last_block - 1;
 		currently_testing = first_block;
 		if (s_flag | v_flag)
-			uprintf("%sWriting test pattern 0x%02X\n", bb_prefix, pattern[pat_idx]);
+			uprintf("%sWriting test pattern 0x%02X\n", bb_prefix, pattern[pattern_type][pat_idx]);
 		cur_op = OP_WRITE;
 		tryout = blocks_at_once;
 		while (currently_testing < last_block) {
-			if (cancel_ops) goto out;
+			if (cancel_ops)
+				goto out;
 			if (max_bb && bb_count >= max_bb) {
 				if (s_flag || v_flag) {
 					uprintf(abort_msg);
-					fprintf(log_fd, abort_msg);
+					fprintf(log_fd, "%s", abort_msg);
 					fflush(log_fd);
 				}
 				cancel_ops = -1;
@@ -480,12 +471,12 @@ static unsigned int test_rw(HANDLE hDrive, blk_t last_block, size_t block_size, 
 			}
 			if (currently_testing + tryout > last_block)
 				tryout = last_block - currently_testing;
-			if (detect_fakes) {
+			if (detect_fakes && (pat_idx == 0)) {
 				/* Add the block number at a fixed (random) offset during each pass to
 				   allow for the detection of 'fake' media (eg. 2GB USB masquerading as 16GB) */
 				for (i=0; i<(int)blocks_at_once; i++) {
-					blk_id = (blk_t*)(intptr_t)(buffer + id_offset+ i*block_size);
-					*blk_id = (blk_t)(currently_testing + i);
+					blk_id = (blk64_t*)(intptr_t)(buffer + id_offset+ i*block_size);
+					*blk_id = (blk64_t)(currently_testing + i);
 				}
 			}
 			got = do_write(hDrive, buffer, tryout, block_size, currently_testing);
@@ -520,7 +511,7 @@ static unsigned int test_rw(HANDLE hDrive, blk_t last_block, size_t block_size, 
 			if (max_bb && bb_count >= max_bb) {
 				if (s_flag || v_flag) {
 					uprintf(abort_msg);
-					fprintf(log_fd, abort_msg);
+					fprintf(log_fd, "%s", abort_msg);
 					fflush(log_fd);
 				}
 				cancel_ops = -1;
@@ -528,10 +519,10 @@ static unsigned int test_rw(HANDLE hDrive, blk_t last_block, size_t block_size, 
 			}
 			if (currently_testing + tryout > last_block)
 				tryout = last_block - currently_testing;
-			if (detect_fakes) {
+			if (detect_fakes && (pat_idx == 0)) {
 				for (i=0; i<(int)blocks_at_once; i++) {
-					blk_id = (blk_t*)(intptr_t)(buffer + id_offset+ i*block_size);
-					*blk_id = (blk_t)(currently_testing + i);
+					blk_id = (blk64_t*)(intptr_t)(buffer + id_offset+ i*block_size);
+					*blk_id = (blk64_t)(currently_testing + i);
 				}
 			}
 			got = do_read(hDrive, read_buffer, tryout, block_size,
@@ -566,11 +557,11 @@ out:
 	return bb_count;
 }
 
-BOOL BadBlocks(HANDLE hPhysicalDrive, ULONGLONG disk_size, size_t block_size,
-	int nb_passes, badblocks_report *report, FILE* fd)
+BOOL BadBlocks(HANDLE hPhysicalDrive, ULONGLONG disk_size, int nb_passes,
+			   int flash_type, badblocks_report *report, FILE* fd)
 {
 	errcode_t error_code;
-	blk_t first_block = 0, last_block = disk_size/block_size;
+	blk64_t last_block = disk_size / BADBLOCK_BLOCK_SIZE;
 
 	if (report == NULL) return FALSE;
 	num_read_errors = 0;
@@ -592,7 +583,7 @@ BOOL BadBlocks(HANDLE hPhysicalDrive, ULONGLONG disk_size, size_t block_size,
 	cancel_ops = 0;
 	/* use a timer to update status every second */
 	SetTimer(hMainDialog, TID_BADBLOCKS_UPDATE, 1000, alarm_intr);
-	report->bb_count = test_rw(hPhysicalDrive, last_block, block_size, first_block, BB_BLOCKS_AT_ONCE, nb_passes);
+	report->bb_count = test_rw(hPhysicalDrive, last_block, BADBLOCK_BLOCK_SIZE, 0, BB_BLOCKS_AT_ONCE, flash_type, nb_passes);
 	KillTimer(hMainDialog, TID_BADBLOCKS_UPDATE);
 	free(bb_list->list);
 	free(bb_list);

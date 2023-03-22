@@ -168,6 +168,7 @@ CFLAGS = @CFLAGS@
 CPPFLAGS = @CPPFLAGS@
 CYGPATH_W = @CYGPATH_W@
 DEFS = @DEFS@
+DLLTOOL = @DLLTOOL@
 ECHO_C = @ECHO_C@
 ECHO_N = @ECHO_N@
 ECHO_T = @ECHO_T@
@@ -234,6 +235,7 @@ pdfdir = @pdfdir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
+runstatedir = @runstatedir@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
 srcdir = @srcdir@
@@ -244,7 +246,7 @@ top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 noinst_LIBRARIES = libinstaller.a
 libinstaller_a_SOURCES = fs.c setadv.c syslxmod.c
-libinstaller_a_CFLAGS = $(AM_CFLAGS)
+libinstaller_a_CFLAGS = $(AM_CFLAGS) -Wno-address-of-packed-member
 all: all-am
 
 .SUFFIXES:

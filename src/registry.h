@@ -1,7 +1,7 @@
 /*
  * Rufus: The Reliable USB Formatting Utility
  * Registry access
- * Copyright © 2012-2015 Pete Batard <pete@akeo.ie>
+ * Copyright © 2012-2022 Pete Batard <pete@akeo.ie>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
  */
 #include <windows.h>
 #include <stdint.h>
+#include <assert.h>
 #include "rufus.h"
 
 #pragma once
@@ -36,9 +37,15 @@ static __inline BOOL DeleteRegistryKey(HKEY key_root, const char* key_name)
 	HKEY hSoftware = NULL;
 	LONG s;
 
-	if (RegOpenKeyExA(key_root, "SOFTWARE", 0, KEY_READ|KEY_CREATE_SUB_KEY, &hSoftware) != ERROR_SUCCESS) {
+	assert(key_root == REGKEY_HKCU);
+	if (key_root != REGKEY_HKCU)
 		return FALSE;
-	}
+	assert(key_name != NULL);
+	if (key_name == NULL)
+		return FALSE;
+
+	if (RegOpenKeyExA(key_root, "SOFTWARE", 0, KEY_READ|KEY_CREATE_SUB_KEY, &hSoftware) != ERROR_SUCCESS)
+		return FALSE;
 
 	s = RegDeleteKeyA(hSoftware, key_name);
 	if ((s != ERROR_SUCCESS) && (s != ERROR_FILE_NOT_FOUND)) {
@@ -50,11 +57,24 @@ static __inline BOOL DeleteRegistryKey(HKEY key_root, const char* key_name)
 	return ((s == ERROR_SUCCESS) || (s == ERROR_FILE_NOT_FOUND));
 }
 
-/* Read a generic registry key value. If a short key_name is used, assume that it belongs to
-   the application and create the app subkey if required */
-static __inline BOOL _GetRegistryKey(HKEY key_root, const char* key_name, DWORD reg_type, LPBYTE dest, DWORD dest_size)
+/* Find if a registry node exists */
+static __inline BOOL IsRegistryNode(HKEY key_root, const char* key_name)
 {
-	const char software_prefix[] = "SOFTWARE\\";
+	BOOL r;
+	HKEY hSoftware = NULL;
+	r = (RegOpenKeyExA(key_root, key_name, 0, KEY_READ, &hSoftware) == ERROR_SUCCESS);
+	if (hSoftware != NULL)
+		RegCloseKey(hSoftware);
+	return r;
+}
+
+/*
+ * Read a generic registry key value. If a short key_name is used, assume that
+ * it belongs to the application and create the app subkey if required
+ */
+static __inline BOOL _GetRegistryKey(HKEY key_root, const char* key_name, DWORD reg_type,
+	LPBYTE dest, DWORD dest_size)
+{
 	char long_key_name[MAX_PATH] = { 0 };
 	BOOL r = FALSE;
 	size_t i;
@@ -67,21 +87,17 @@ static __inline BOOL _GetRegistryKey(HKEY key_root, const char* key_name, DWORD 
 	if (key_name == NULL)
 		return FALSE;
 
-	for (i=safe_strlen(key_name); i>0; i--) {
+	for (i = safe_strlen(key_name); i > 0; i--) {
 		if (key_name[i] == '\\')
 			break;
 	}
 
-	if (i != 0) {
-		// Prefix with "SOFTWARE" if needed
-		if (_strnicmp(key_name, software_prefix, sizeof(software_prefix) - 1) != 0) {
-			strcpy(long_key_name, software_prefix);
-			safe_strcat(long_key_name, sizeof(long_key_name), key_name);
-			long_key_name[sizeof(software_prefix) + i - 1] = 0;
-		} else {
-			safe_strcpy(long_key_name, sizeof(long_key_name), key_name);
-			long_key_name[i] = 0;
-		}
+	if (i > 0) {
+		// For a read operation, allow access to any long key
+		if (i >= sizeof(long_key_name))
+			return FALSE;
+		static_strcpy(long_key_name, key_name);
+		long_key_name[i] = 0;
 		i++;
 		if (RegOpenKeyExA(key_root, long_key_name, 0, KEY_READ, &hApp) != ERROR_SUCCESS) {
 			hApp = NULL;
@@ -115,14 +131,19 @@ out:
 /* Write a generic registry key value (create the key if it doesn't exist) */
 static __inline BOOL _SetRegistryKey(HKEY key_root, const char* key_name, DWORD reg_type, LPBYTE src, DWORD src_size)
 {
-	const char software_prefix[] = "SOFTWARE\\";
-	char long_key_name[MAX_PATH] = { 0 };
 	BOOL r = FALSE;
-	size_t i;
 	HKEY hRoot = NULL, hApp = NULL;
 	DWORD dwDisp, dwType = reg_type;
 
+	assert(key_name != NULL);
 	if (key_name == NULL)
+		return FALSE;
+	assert(key_root == REGKEY_HKCU);
+	if (key_root != REGKEY_HKCU)
+		return FALSE;
+	// Validate that we are always dealing with a short key
+	assert(strchr(key_name, '\\') == NULL);
+	if (strchr(key_name, '\\') != NULL)
 		return FALSE;
 
 	if (RegOpenKeyExA(key_root, NULL, 0, KEY_READ|KEY_CREATE_SUB_KEY, &hRoot) != ERROR_SUCCESS) {
@@ -130,38 +151,14 @@ static __inline BOOL _SetRegistryKey(HKEY key_root, const char* key_name, DWORD 
 		goto out;
 	}
 
-	// Find if we're dealing with a short key
-	for (i = safe_strlen(key_name); i>0; i--) {
-		if (key_name[i] == '\\')
-			break;
+	// This is a short key name, store the value under our app sub-hive
+	if (RegCreateKeyExA(hRoot, "SOFTWARE\\" COMPANY_NAME "\\" APPLICATION_NAME, 0, NULL, 0,
+		KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_CREATE_SUB_KEY, NULL, &hApp, &dwDisp) != ERROR_SUCCESS) {
+		hApp = NULL;
+		goto out;
 	}
 
-	if (i == 0) {
-		// If this is a short key name, store the value under our app sub-hive
-		if (RegCreateKeyExA(hRoot, "SOFTWARE\\" COMPANY_NAME "\\" APPLICATION_NAME, 0, NULL, 0,
-			KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_CREATE_SUB_KEY, NULL, &hApp, &dwDisp) != ERROR_SUCCESS) {
-			hApp = NULL;
-			goto out;
-		}
-	} else {
-		// Prefix with "SOFTWARE" if needed
-		if (_strnicmp(key_name, software_prefix, sizeof(software_prefix) - 1) != 0) {
-			strcpy(long_key_name, software_prefix);
-			safe_strcat(long_key_name, sizeof(long_key_name), key_name);
-			long_key_name[sizeof(software_prefix) + i - 1] = 0;
-		} else {
-			safe_strcpy(long_key_name, sizeof(long_key_name), key_name);
-			long_key_name[i] = 0;
-		}
-		i++;
-		if (RegCreateKeyExA(hRoot, long_key_name, 0, NULL, 0,
-			KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_CREATE_SUB_KEY, NULL, &hApp, &dwDisp) != ERROR_SUCCESS) {
-			hApp = NULL;
-			goto out;
-		}
-	}
-
-	r = (RegSetValueExA(hApp, &key_name[i], 0, dwType, src, src_size) == ERROR_SUCCESS);
+	r = (RegSetValueExA(hApp, key_name, 0, dwType, src, src_size) == ERROR_SUCCESS);
 
 out:
 	if (hRoot != NULL)

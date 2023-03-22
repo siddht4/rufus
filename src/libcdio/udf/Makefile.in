@@ -168,6 +168,7 @@ CFLAGS = @CFLAGS@
 CPPFLAGS = @CPPFLAGS@
 CYGPATH_W = @CYGPATH_W@
 DEFS = @DEFS@
+DLLTOOL = @DLLTOOL@
 ECHO_C = @ECHO_C@
 ECHO_N = @ECHO_N@
 ECHO_T = @ECHO_T@
@@ -234,6 +235,7 @@ pdfdir = @pdfdir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
+runstatedir = @runstatedir@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
 srcdir = @srcdir@
@@ -245,7 +247,7 @@ top_srcdir = @top_srcdir@
 noinst_LIBRARIES = libudf.a
 libudf_a_SOURCES = udf.c udf_file.c udf_fs.c udf_time.c filemode.c
 # Boy do you NOT want to have HAVE_CONFIG_H set before $(AM_CFLAGS) with Clang!
-libudf_a_CFLAGS = $(AM_CFLAGS) -DHAVE_CONFIG_H -I. -I.. -I../driver
+libudf_a_CFLAGS = $(AM_CFLAGS) -DHAVE_CONFIG_H -I$(srcdir) -I$(srcdir)/.. -I$(srcdir)/../driver
 all: all-am
 
 .SUFFIXES:

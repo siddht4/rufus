@@ -1,4 +1,4 @@
-AC_INIT([rufus], [2.9], [https://github.com/pbatard/rufus/issues], [rufus], [http://rufus.akeo.ie])
+AC_INIT([rufus], [3.22], [https://github.com/pbatard/rufus/issues], [rufus], [https://rufus.ie])
 AM_INIT_AUTOMAKE([-Wno-portability foreign no-dist no-dependencies])
 AC_CONFIG_SRCDIR([src/rufus.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -12,15 +12,16 @@ AC_PROG_AR
 AC_PROG_RANLIB
 AC_PROG_SED
 AC_PATH_PROG(RM, rm, rm)
-AC_CHECK_TOOL(STRIP, strip, strip)
-AC_CHECK_TOOL(WINDRES, windres, windres)
+AC_CHECK_TOOL(DLLTOOL, dlltool, :)
+AC_CHECK_TOOL(STRIP, strip, :)
+AC_CHECK_TOOL(WINDRES, windres, :)
 AC_C_INLINE
 AC_DEFINE([_GNU_SOURCE], [], [Use GNU extensions])
 
-# Clang needs an explicit WIN32_WINNT defined else it produces warnings
-# in msapi_utf8.h - including winver.h only doesn't work
-AM_CFLAGS="${AM_CFLAGS} -DWINVER=0x501 -D_WIN32_IE=0x501 -D_WIN32_WINNT=0x501"
-AM_LDFLAGS="${AM_LDFLAGS} -Wl,-no-undefined"
+AM_CFLAGS="${AM_CFLAGS} -DWINVER=0x601 -D_WIN32_WINNT=0x601 -D_WIN32_IE=0x800"
+# "-Wl,--nxcompat" to enable DEP (Data Execution Prevention)
+# "-Wl,--dynamicbase" to enable ASLR (Address Space Layout Randomization)
+AM_LDFLAGS="${AM_LDFLAGS} -Wl,-no-undefined -Wl,--nxcompat -Wl,--no-insert-timestamp -Wl,--dynamicbase"
 
 # Debug symbols
 AC_ARG_ENABLE([debug],
@@ -63,7 +64,7 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([])],
 	[nopointersign_cflags="-Wno-pointer-sign"], [nopointersign_cflags=""])
 CFLAGS="${saved_CFLAGS}"
 
-AM_CFLAGS="$AM_CFLAGS -DUNICODE -D_UNICODE -std=gnu99 -Wshadow -Wall -Wundef -Wunused -Wstrict-prototypes -Werror-implicit-function-declaration $nopointersign_cflags"
+AM_CFLAGS="$AM_CFLAGS -DUNICODE -D_UNICODE -UNDEBUG -DCOBJMACROS -D__USE_MINGW_ANSI_STDIO=0 -std=gnu99 -Wshadow -Wall -Wformat-security -Wundef -Wunused -Wstrict-prototypes -Wno-restrict -Wno-array-bounds -Werror-implicit-function-declaration -Wbidi-chars=none $nopointersign_cflags"
 
 AC_SUBST([VISIBILITY_CFLAGS])
 AC_SUBST([AM_CFLAGS])
@@ -71,12 +72,14 @@ AC_SUBST([AM_LDFLAGS])
 AC_SUBST([SUFFIX])
 
 AC_CONFIG_FILES([Makefile])
+AC_CONFIG_FILES([.mingw/Makefile])
 AC_CONFIG_FILES([src/Makefile])
 AC_CONFIG_FILES([src/bled/Makefile])
+AC_CONFIG_FILES([src/ext2fs/Makefile])
 AC_CONFIG_FILES([src/libcdio/iso9660/Makefile])
 AC_CONFIG_FILES([src/libcdio/udf/Makefile])
 AC_CONFIG_FILES([src/libcdio/driver/Makefile])
-AC_CONFIG_FILES([res/localization/Makefile])
+AC_CONFIG_FILES([res/loc/Makefile])
 AC_CONFIG_FILES([src/ms-sys/Makefile])
 AC_CONFIG_FILES([src/syslinux/libfat/Makefile])
 AC_CONFIG_FILES([src/syslinux/libinstaller/Makefile])

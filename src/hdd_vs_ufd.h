@@ -1,7 +1,7 @@
 /*
  * Rufus: The Reliable USB Formatting Utility
  * SMART HDD vs Flash detection - isHDD() tables
- * Copyright © 2013-2014 Pete Batard <pete@akeo.ie>
+ * Copyright © 2013-2023 Pete Batard <pete@akeo.ie>
  *
  * Based in part on drivedb.h from Smartmontools:
  * http://svn.code.sf.net/p/smartmontools/code/trunk/smartmontools/drivedb.h
@@ -89,7 +89,12 @@ static str_score_t str_score[] = {
 
 static str_score_t str_adjust[] = {
 	{ "Gadget", -10 },
-	{ "Flash", -10 }
+	{ "Flash", -10 },
+	{ "SD-CARD", -10 },
+	{ "HDD", +20 },
+	{ "SATA", +20 },
+	{ "SCSI", +20 },
+	{ "SSD", +20 }
 };
 
 /* The lists belows set a score according to VID & VID:PID
@@ -106,17 +111,19 @@ static str_score_t str_adjust[] = {
 static vid_score_t vid_score[] = {
 	{ 0x0011, -5 },		// Kingston
 	{ 0x03f0, -5 },		// HP
+	{ 0x0409, -10 },	// NEC/Toshiba
 	{ 0x0411, 5 },		// Buffalo
 	{ 0x0420, -5 },		// Chipsbank
 	{ 0x046d, -5 },		// Logitech
 	{ 0x0480, 5 },		// Toshiba
-	{ 0x048d, -5 },		// ITE
+	{ 0x048d, -10 },	// ITE
 	{ 0x04b4, 10 },		// Cypress
 	{ 0x04c5, 7 },		// Fujitsu
 	{ 0x04e8, 5 },		// Samsung
 	{ 0x04f3, -5 },		// Elan
 	{ 0x04fc, 5 },		// Sunplus
-	{ 0x058f, -2 },		// Alcor
+	{ 0x056e, -5 },		// Elecom
+	{ 0x058f, -5 },		// Alcor
 	{ 0x059b, 7 },		// Iomega
 	{ 0x059f, 5 },		// LaCie
 	{ 0x05ab, 10 },		// In-System Design
@@ -134,6 +141,7 @@ static vid_score_t vid_score[] = {
 	{ 0x09da, -5 },		// A4 Tech
 	{ 0x0b27, -5 },		// Ritek
 	{ 0x0bc2, 10 },		// Seagate
+	{ 0x0bda, -10 },	// Realtek
 	{ 0x0c76, -5 },		// JMTek
 	{ 0x0cf2, -5 },		// ENE
 	{ 0x0d49, 10 },		// Maxtor
@@ -164,6 +172,7 @@ static vid_score_t vid_score[] = {
 	{ 0x1f75, -2 },		// Innostor
 	{ 0x2001, -5 },		// Micov
 	{ 0x201e, -5 },		// Evdo
+	{ 0x2109, 10 },		// VIA Labs
 	{ 0x2188, -5 },		// SMI
 	{ 0x3538, -5 },		// PQI
 	{ 0x413c, -5 },		// Ameco
@@ -244,21 +253,38 @@ static vidpid_score_t vidpid_score[] = {
 	{ 0x04e8, 0x6845, -20 },	// 16 GB UFD
 	{ 0x04e8, 0x685E, -20 },	// 16 GB UFD
 	// Sunplus exceptions
-	{ 0x04fc, 0x05d8, -20 },	// Verbatim flash drive
-	{ 0x04fc, 0x5720, -20 },	// Card reader
+	{ 0x04fc, 0x05d8, -20 },	// Verbatim Flash Drive
+	{ 0x04fc, 0x5720, -20 },	// Card Reader
 	// LaCie exceptions
 	{ 0x059f, 0x1027, -20 },	// 16 GB UFD
 	{ 0x059f, 0x103B, -20 },	// 16 GB UFD
 	{ 0x059f, 0x1064, -20 },	// 16 GB UFD
+	{ 0x059f, 0x1079, -20 },	// LaCie XtremKey UFD
+	// Apple exceptions
+	{ 0x05ac, 0x8400, -20},
+	{ 0x05ac, 0x8401, -20},
+	{ 0x05ac, 0x8402, -20},
+	{ 0x05ac, 0x8403, -20},
+	{ 0x05ac, 0x8404, -20},
+	{ 0x05ac, 0x8405, -20},
+	{ 0x05ac, 0x8406, -20},
+	{ 0x05ac, 0x8407, -20},
+	// No idea who these guys are. They don't exist in usb.ids.
+	{ 0x6557, 0x0021, -5},
 	// Prolific exceptions
+	{ 0x067b, 0x2506, -20 },	// 8 GB Micro Hard Drive
 	{ 0x067b, 0x2517, -20 },	// 1 GB UFD
 	{ 0x067b, 0x2528, -20 },	// 8 GB UFD
+	{ 0x067b, 0x2731, -20 },	// SD/TF Card Reader
+	{ 0x067b, 0x2733, -20 },	// EAGET Mass Storage USB Device
 	{ 0x067b, 0x3400, -10 },	// Hi-Speed Flash Disk with TruePrint AES3400
 	{ 0x067b, 0x3500, -10 },	// Hi-Speed Flash Disk with TruePrint AES3500
+	// Sandisk exceptions
+	{ 0x0781, 0x5580, -20 },
 	// Freecom exceptions
 	{ 0x07ab, 0xfcab, -20 },	// 4 GB UFD
 	// Samsung exceptions
-	{ 0x090c, 0x1000, -20 },	// Samsung Flash drive
+	{ 0x090c, 0x1000, -20 },	// Samsung Flash Drive
 	// Toshiba exceptions
 	{ 0x0930, 0x1400, -20 },
 	{ 0x0930, 0x6533, -20 },
@@ -266,11 +292,15 @@ static vidpid_score_t vidpid_score[] = {
 	{ 0x0930, 0x6544, -20 },
 	{ 0x0930, 0x6545, -20 },
 	// Innostor exceptions
-	{ 0x0BC2, 0x03312, -20 },
+	{ 0x0bc2, 0x3312, -20 },
+	// JMicron exceptions
+	{ 0x152d, 0x0901, -20 },
 	// Verbatim exceptions
 	{ 0x18a5, 0x0243, -20 },
 	{ 0x18a5, 0x0245, -20 },
 	{ 0x18a5, 0x0302, -20 },
 	{ 0x18a5, 0x0304, -20 },
 	{ 0x18a5, 0x3327, -20 },
+	// More Innostor
+	{ 0x1f75, 0x0917, -10 },	// Intenso Speed Line USB Device
 };

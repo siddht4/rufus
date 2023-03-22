@@ -66,7 +66,7 @@ libfat_open(int (*readfunc) (intptr_t, void *, size_t, libfat_sector_t),
     if (!fatsize)
 	fatsize = read32(&bs->u.fat32.bpb_fatsz32);
 
-    fs->rootdir = fs->fat + fatsize * read8(&bs->bsFATs);
+    fs->rootdir = fs->fat + (libfat_sector_t)fatsize * read8(&bs->bsFATs);
 
     rootdirsize = ((read16(&bs->bsRootDirEnts) << 5) + LIBFAT_SECTOR_MASK)
 	>> LIBFAT_SECTOR_SHIFT;
@@ -92,7 +92,7 @@ libfat_open(int (*readfunc) (intptr_t, void *, size_t, libfat_sector_t),
     } else
 	goto barf;		/* Impossibly many clusters */
 
-	minfatsize = (minfatsize + LIBFAT_SECTOR_SIZE - 1) >> LIBFAT_SECTOR_SHIFT;
+    minfatsize = (minfatsize + LIBFAT_SECTOR_SIZE - 1) >> LIBFAT_SECTOR_SHIFT;
 
     if (minfatsize > fatsize)
 	goto barf;		/* The FATs don't fit */

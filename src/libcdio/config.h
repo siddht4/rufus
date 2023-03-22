@@ -48,6 +48,9 @@
 /* Define if you have the iconv() function and it works. */
 /* #undef HAVE_ICONV */
 
+/* Define this if you want to use the 2020 version of the libcdio API. */
+#define DO_NOT_WANT_COMPATIBILITY /**/
+
 /* Define to 1 if you have the <inttypes.h> header file. */
 #define HAVE_INTTYPES_H 1 /* provided in MSVC/missing if needed */
 
@@ -134,7 +137,9 @@
 #define HAVE_STRING_H 1
 
 /* Define to 1 if you have the `strndup' function. */
-/* #undef HAVE_STRNDUP */
+#if defined(__MINGW32__)
+#define HAVE_STRNDUP 1
+#endif
 
 /* Define this if you have struct timespec */
 /* #undef HAVE_STRUCT_TIMESPEC */
